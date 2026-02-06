@@ -24,10 +24,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from textual import on, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -202,7 +202,7 @@ class Storage:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.projects_dir = base / "projects"
-        self.exports_dir = Path.home() / "Documents"
+        self.exports_dir = Path.home() / "Documents" / "write.exports"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -326,20 +326,63 @@ def detect_libreoffice() -> Optional[str]:
 
 
 def _lua_bib_entry_xml() -> str:
-    """Lua snippet: convert a Para block to a hanging-indent OpenXML raw block."""
+    """Lua snippet: convert a Para block to a hanging-indent OpenXML raw block.
+
+    Walks each inline element so that Emph (italic) and Strong (bold)
+    formatting survive into the OpenXML output – fixing the bug where
+    ``pandoc.utils.stringify`` stripped all markup from bibliography entries.
+    """
     return """
+local function escape_xml(s)
+  s = s:gsub("&", "&amp;")
+  s = s:gsub("<", "&lt;")
+  s = s:gsub(">", "&gt;")
+  return s
+end
+
+local function inlines_to_openxml(inlines)
+  local runs = {}
+  for _, inl in ipairs(inlines) do
+    if inl.t == "Emph" then
+      local txt = escape_xml(pandoc.utils.stringify(inl))
+      table.insert(runs, string.format(
+        '<w:r><w:rPr><w:i/><w:iCs/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r>', txt))
+    elseif inl.t == "Strong" then
+      local txt = escape_xml(pandoc.utils.stringify(inl))
+      table.insert(runs, string.format(
+        '<w:r><w:rPr><w:b/><w:bCs/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r>', txt))
+    elseif inl.t == "Str" then
+      table.insert(runs, string.format(
+        '<w:r><w:t xml:space="preserve">%s</w:t></w:r>', escape_xml(inl.text)))
+    elseif inl.t == "Space" then
+      table.insert(runs, '<w:r><w:t xml:space="preserve"> </w:t></w:r>')
+    elseif inl.t == "SoftBreak" or inl.t == "LineBreak" then
+      table.insert(runs, '<w:r><w:t xml:space="preserve"> </w:t></w:r>')
+    elseif inl.t == "Link" then
+      local txt = escape_xml(pandoc.utils.stringify(inl))
+      table.insert(runs, string.format(
+        '<w:r><w:t xml:space="preserve">%s</w:t></w:r>', txt))
+    else
+      local txt = escape_xml(pandoc.utils.stringify(inl))
+      if txt ~= "" then
+        table.insert(runs, string.format(
+          '<w:r><w:t xml:space="preserve">%s</w:t></w:r>', txt))
+      end
+    end
+  end
+  return table.concat(runs)
+end
+
 local function bib_entry_block(block)
-  local text = pandoc.utils.stringify(block)
+  local runs_xml = inlines_to_openxml(block.content)
   return pandoc.RawBlock('openxml', string.format([[
 <w:p>
   <w:pPr>
     <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
     <w:ind w:left="720" w:hanging="720"/>
   </w:pPr>
-  <w:r>
-    <w:t>%s</w:t>
-  </w:r>
-</w:p>]], text))
+  %s
+</w:p>]], runs_xml))
 end
 
 local function is_bib_heading(block)
@@ -867,6 +910,7 @@ class ProjectsScreen(Screen):
         Binding("d", "delete_project", "Delete"),
         Binding("e", "toggle_exports", "Exports"),
         Binding("q", "quit", "Quit", show=False),
+        Binding("ctrl+q", "quit", "Quit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -885,6 +929,12 @@ class ProjectsScreen(Screen):
         margin: 1 2;
         height: 1fr;
     }
+    #projects-hints {
+        dock: bottom;
+        height: 1;
+        color: #777;
+        padding: 0 2;
+    }
     """
 
     def __init__(self) -> None:
@@ -896,6 +946,7 @@ class ProjectsScreen(Screen):
         with Vertical(id="projects-view"):
             yield Static("Projects", id="projects-title")
             yield OptionList(id="project-list")
+            yield Static("(n) New  (d) Delete  (e) Exports", id="projects-hints")
         with Vertical(id="exports-view"):
             yield Static("Exports", id="exports-title")
             yield OptionList(id="export-file-list")
@@ -955,7 +1006,12 @@ class ProjectsScreen(Screen):
         self._open_file(Path(event.option_id))
 
     def _open_file(self, path: Path) -> None:
-        """Open a file with the system viewer."""
+        """Open a file with the system viewer, or print if PDF."""
+        if path.suffix.lower() == ".pdf":
+            printers = self._detect_printers()
+            if printers:
+                self.app.push_screen(PrinterPickerModal(printers, path))
+                return
         try:
             if sys.platform == "darwin":
                 subprocess.Popen(["open", str(path)])
@@ -963,6 +1019,24 @@ class ProjectsScreen(Screen):
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as exc:
             self.notify(f"Could not open file: {exc}", severity="error")
+
+    @staticmethod
+    def _detect_printers() -> list[str]:
+        """Return list of available printer names via lpstat."""
+        try:
+            result = subprocess.run(
+                ["lpstat", "-a"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return []
+            printers: list[str] = []
+            for line in result.stdout.strip().splitlines():
+                name = line.split()[0] if line.split() else ""
+                if name:
+                    printers.append(name)
+            return printers
+        except Exception:
+            return []
 
     def action_new_project(self) -> None:
         if self._showing_exports:
@@ -1123,7 +1197,17 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 
 
 class MarkdownTextArea(TextArea):
-    """TextArea with combined heading + inline markdown highlighting."""
+    """TextArea with combined heading + inline markdown highlighting.
+
+    All inherited TextArea bindings are re-declared as ``system=True``
+    so they stay functional but don't clutter the keybindings panel.
+    The curated set on EditorScreen is what the user sees instead.
+    """
+
+    BINDINGS = [
+        Binding(b.key, b.action, b.description, show=b.show, system=True)
+        for b in TextArea.BINDINGS
+    ]
 
     def _build_highlight_map(self) -> None:
         super()._build_highlight_map()
@@ -1140,12 +1224,26 @@ class EditorScreen(Screen):
     """The main writing screen."""
 
     BINDINGS = [
-        Binding("ctrl+s", "save", "Save", show=False),
-        Binding("ctrl+q", "close_project", "Close", show=False),
-        Binding("ctrl+j", "cite", "Cite"),
-        Binding("ctrl+n", "footnote", "Footnote"),
-        Binding("ctrl+b", "bold", "Bold"),
-        Binding("ctrl+i", "italic", "Italic"),
+        # Hide inherited Screen bindings from keybindings panel
+        Binding("tab", "app.focus_next", "Focus Next", show=False, system=True),
+        Binding("shift+tab", "app.focus_previous", "Focus Previous", show=False, system=True),
+        # Curated keybindings
+        Binding("ctrl+b", "bold", "Bold", show=True),
+        Binding("ctrl+c", "noop", "Copy", show=True),
+        Binding("ctrl+i", "italic", "Italic", show=True),
+        Binding("ctrl+j", "cite", "Insert citation", show=True),
+        Binding("ctrl+l", "bibliography", "Bibliography", show=True),
+        Binding("ctrl+n", "footnote", "Insert footnote", show=True),
+        Binding("ctrl+o", "sources", "Sources", show=True),
+        Binding("ctrl+p", "command_palette", "Command palette", show=True),
+        Binding("ctrl+q", "close_project", "Quit to projects", show=True),
+        Binding("ctrl+r", "export_pdf", "Export", show=True),
+        Binding("ctrl+s", "save", "Save", show=True),
+        Binding("ctrl+v", "noop", "Paste", show=True),
+        Binding("ctrl+x", "noop", "Cut", show=True),
+        Binding("ctrl+z", "noop", "Undo", show=True),
+        Binding("ctrl+h", "toggle_help", "Keybindings", show=True),
+        Binding("shift+arrows", "noop", "Select text", show=True),
     ]
 
     AUTO_SAVE_SECONDS = 30.0
@@ -1218,6 +1316,17 @@ class EditorScreen(Screen):
             self.notify("Saved.")
 
     # ── actions ────────────────────────────────────────────────────────
+
+    def action_noop(self) -> None:
+        """No-op action for display-only bindings."""
+        pass
+
+    def action_toggle_help(self) -> None:
+        """Toggle the keybindings panel."""
+        if self.screen.query("HelpPanel"):
+            self.app.action_hide_help_panel()
+        else:
+            self.app.action_show_help_panel()
 
     def action_save(self) -> None:
         self._do_save()
@@ -1302,6 +1411,20 @@ class EditorScreen(Screen):
         reloaded = app.storage.load_project(self.project.id)
         if reloaded:
             self.project = reloaded
+
+    def action_import_bib(self) -> None:
+        self.app.push_screen(
+            BibImportModal(),
+            callback=self._on_bib_imported,
+        )
+
+    def _on_bib_imported(self, sources: list[Source] | None) -> None:
+        if sources:
+            for s in sources:
+                self.project.add_source(s)
+            app: WriteApp = self.app  # type: ignore[assignment]
+            app.storage.save_project(self.project)
+            self.notify(f"Imported {len(sources)} source(s).")
 
     # ── YAML frontmatter insertion ──────────────────────────────────
 
@@ -1535,6 +1658,66 @@ class ExportFormatModal(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+# ── Printer picker modal ──────────────────────────────────────────────
+
+
+class PrinterPickerModal(ModalScreen[str | None]):
+    """Pick a printer from available system printers."""
+
+    DEFAULT_CSS = """
+    PrinterPickerModal {
+        align: center middle;
+    }
+    #printer-box {
+        width: 60%;
+        max-width: 60;
+        height: auto;
+        max-height: 18;
+        border: solid #666;
+        background: $surface;
+        padding: 1 2;
+    }
+    #printer-box Label {
+        margin-bottom: 1;
+    }
+    #printer-list {
+        height: auto;
+        max-height: 10;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, printers: list[str], file_path: Path) -> None:
+        super().__init__()
+        self._printers = printers
+        self._file_path = file_path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="printer-box"):
+            yield Label("Print to")
+            ol = OptionList(id="printer-list")
+            for p in self._printers:
+                ol.add_option(Option(p, id=p))
+            yield ol
+
+    def on_mount(self) -> None:
+        self.query_one("#printer-list", OptionList).focus()
+
+    @on(OptionList.OptionSelected, "#printer-list")
+    def _select(self, event: OptionList.OptionSelected) -> None:
+        printer_name = event.option_id
+        try:
+            subprocess.Popen(["lp", "-d", printer_name, str(self._file_path)])
+            self.notify(f"Sent to {printer_name}.")
+        except Exception as exc:
+            self.notify(f"Print failed: {exc}", severity="error")
+        self.dismiss(printer_name)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── Citation picker modal ─────────────────────────────────────────────
 
 
@@ -1588,6 +1771,18 @@ class CitePickerModal(ModalScreen[str | None]):
         ol.clear_options()
         for s in self.filtered:
             ol.add_option(Option(f"{s.author} ({s.year}) — {s.title}", id=s.id))
+        if self.filtered:
+            ol.highlighted = 0
+
+    def on_key(self, event) -> None:
+        """Down arrow in search input moves focus to the option list."""
+        if event.key == "down":
+            focused = self.app.focused
+            search_input = self.query_one("#cite-search", Input)
+            if focused is search_input:
+                ol = self.query_one("#cite-results", OptionList)
+                ol.focus()
+                event.prevent_default()
 
     @on(OptionList.OptionSelected, "#cite-results")
     def _select(self, event: OptionList.OptionSelected) -> None:
@@ -1601,9 +1796,11 @@ class CitePickerModal(ModalScreen[str | None]):
 
     @on(Input.Submitted, "#cite-search")
     def _submit_search(self, event: Input.Submitted) -> None:
-        """Enter in search field picks the highlighted result."""
+        """Enter in search field picks the highlighted result (default to first)."""
         ol: OptionList = self.query_one("#cite-results", OptionList)
         idx = ol.highlighted
+        if idx is None and self.filtered:
+            idx = 0
         if idx is not None and idx < len(self.filtered):
             s = self.filtered[idx]
             self.dismiss(f"^[{s.to_chicago_footnote()}]")
@@ -1668,6 +1865,7 @@ class SourcesModal(ModalScreen[None]):
 
     def on_mount(self) -> None:
         self._refresh_list()
+        self.query_one("#btn-add", Button).focus()
 
     def _refresh_list(self) -> None:
         ol: OptionList = self.query_one("#source-list", OptionList)
@@ -1727,16 +1925,22 @@ class SourcesModal(ModalScreen[None]):
 
 
 class SourceFormModal(ModalScreen[Source | None]):
-    """Form for adding a new source."""
+    """Form for adding a new source.
+
+    All three field sets are pre-built in compose() with unique IDs
+    (e.g. field-book-author, field-article-author) to avoid the crash
+    caused by dynamically destroying/recreating widgets with shared IDs.
+    Only the active type's container is visible.
+    """
 
     DEFAULT_CSS = """
     SourceFormModal {
         align: center middle;
     }
     #source-form-box {
-        width: 80%;
-        max-width: 80;
-        height: 80%;
+        width: 90%;
+        max-width: 100;
+        height: 90%;
         border: solid #666;
         background: $surface;
         padding: 1 2;
@@ -1754,14 +1958,23 @@ class SourceFormModal(ModalScreen[Source | None]):
     #source-fields {
         height: 1fr;
     }
+    .book-field, .article-field, .website-field {
+        display: none;
+    }
     .form-buttons {
         height: auto;
         margin-top: 1;
+        display: none;
     }
     .form-buttons Button {
         margin-right: 1;
     }
     .field-label {
+        margin-top: 1;
+    }
+    #tab-hint {
+        display: none;
+        color: #777;
         margin-top: 1;
     }
     """
@@ -1770,7 +1983,7 @@ class SourceFormModal(ModalScreen[Source | None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self.current_type = "book"
+        self.current_type = ""
 
     def compose(self) -> ComposeResult:
         with Vertical(id="source-form-box"):
@@ -1780,15 +1993,16 @@ class SourceFormModal(ModalScreen[Source | None]):
                 yield Button("Article", id="btn-type-article")
                 yield Button("Website", id="btn-type-website")
             with VerticalScroll(id="source-fields"):
-                yield from self._field_widgets("book")
+                # All fields flat — no nested containers.
+                # Visibility toggled per-type via CSS classes.
+                for stype in SOURCE_TYPES:
+                    for field_key, label in SOURCE_FIELDS[stype]:
+                        yield Label(label, classes=f"field-label {stype}-field")
+                        yield Input(placeholder=label, id=f"field-{stype}-{field_key}", classes=f"{stype}-field")
+                yield Label("Tab \u2192 next field | Shift+Tab \u2192 previous", id="tab-hint")
             with Horizontal(classes="form-buttons"):
                 yield Button("Save", id="btn-save")
                 yield Button("Cancel", id="btn-form-cancel")
-
-    def _field_widgets(self, stype: str):
-        for field_key, label in SOURCE_FIELDS[stype]:
-            yield Label(label, classes="field-label")
-            yield Input(placeholder=label, id=f"field-{field_key}")
 
     def _switch_type(self, stype: str) -> None:
         self.current_type = stype
@@ -1796,12 +2010,16 @@ class SourceFormModal(ModalScreen[Source | None]):
         for t in SOURCE_TYPES:
             btn = self.query_one(f"#btn-type-{t}", Button)
             btn.variant = "primary" if t == stype else "default"
-        # Rebuild fields
-        container = self.query_one("#source-fields", VerticalScroll)
-        container.remove_children()
-        for field_key, label in SOURCE_FIELDS[stype]:
-            container.mount(Label(label, classes="field-label"))
-            container.mount(Input(placeholder=label, id=f"field-{field_key}"))
+        # Show the right fields, hide others
+        for t in SOURCE_TYPES:
+            for w in self.query(f".{t}-field"):
+                w.styles.display = "block" if t == stype else "none"
+        # Show form buttons and tab hint
+        self.query_one(".form-buttons").styles.display = "block"
+        self.query_one("#tab-hint").styles.display = "block"
+        # Focus the first input
+        first_input = self.query_one(f"#field-{stype}-{SOURCE_FIELDS[stype][0][0]}", Input)
+        first_input.focus()
 
     @on(Button.Pressed, "#btn-type-book")
     def _type_book(self, event: Button.Pressed) -> None:
@@ -1824,11 +2042,14 @@ class SourceFormModal(ModalScreen[Source | None]):
         self.dismiss(None)
 
     def _do_save(self) -> None:
+        if not self.current_type:
+            self.notify("Please select a source type first.", severity="error")
+            return
         try:
             data: dict[str, str] = {}
             for field_key, _ in SOURCE_FIELDS[self.current_type]:
                 try:
-                    inp = self.query_one(f"#field-{field_key}", Input)
+                    inp = self.query_one(f"#field-{self.current_type}-{field_key}", Input)
                     data[field_key] = inp.value.strip()
                 except Exception:
                     data[field_key] = ""
@@ -1862,32 +2083,184 @@ class SourceFormModal(ModalScreen[Source | None]):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  BibTeX Import
+# ════════════════════════════════════════════════════════════════════════
+
+
+def parse_bibtex(text: str) -> list[Source]:
+    """Parse BibTeX entries into Source objects.
+
+    Handles @book{...}, @article{...}, @misc{...}, @online{...}, etc.
+    """
+    sources: list[Source] = []
+    # Match @type{key, ... } entries (greedy within braces, balanced)
+    entry_re = re.compile(r"@(\w+)\s*\{([^,]*),\s*(.*?)\}\s*(?=@|\Z)", re.DOTALL)
+    field_re = re.compile(r"(\w+)\s*=\s*[{\"](.*?)[}\"]", re.DOTALL)
+
+    type_map = {
+        "book": "book",
+        "inbook": "book",
+        "incollection": "book",
+        "article": "article",
+        "inproceedings": "article",
+        "conference": "article",
+        "misc": "website",
+        "online": "website",
+        "electronic": "website",
+    }
+
+    for m in entry_re.finditer(text):
+        bib_type = m.group(1).lower()
+        body = m.group(3)
+        fields: dict[str, str] = {}
+        for fm in field_re.finditer(body):
+            fields[fm.group(1).lower()] = fm.group(2).strip()
+
+        stype = type_map.get(bib_type, "book")
+        author = fields.get("author", "")
+        title = fields.get("title", "")
+        if not author and not title:
+            continue
+
+        sources.append(Source(
+            id=datetime.now().strftime("%Y%m%d_%H%M%S_%f") + f"_{len(sources)}",
+            source_type=stype,
+            author=author,
+            title=title,
+            year=fields.get("year", ""),
+            publisher=fields.get("publisher", ""),
+            city=fields.get("address", ""),
+            journal=fields.get("journal", fields.get("journaltitle", "")),
+            volume=fields.get("volume", ""),
+            issue=fields.get("number", ""),
+            pages=fields.get("pages", ""),
+            url=fields.get("url", ""),
+            access_date=fields.get("urldate", ""),
+            site_name=fields.get("organization", fields.get("howpublished", "")),
+        ))
+    return sources
+
+
+class BibImportModal(ModalScreen[list[Source] | None]):
+    """Modal to import a .bib file."""
+
+    DEFAULT_CSS = """
+    BibImportModal {
+        align: center middle;
+    }
+    #bib-import-box {
+        width: 70%;
+        max-width: 70;
+        height: auto;
+        max-height: 14;
+        border: solid #666;
+        background: $surface;
+        padding: 1 2;
+    }
+    #bib-import-box Label {
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="bib-import-box"):
+            yield Label("Import .bib File")
+            yield Input(placeholder="Path to .bib file…", id="bib-path-input")
+            with Horizontal():
+                yield Button("Import", id="btn-bib-import")
+                yield Button("Cancel", id="btn-bib-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#bib-path-input", Input).focus()
+
+    @on(Button.Pressed, "#btn-bib-import")
+    def _import(self, event: Button.Pressed) -> None:
+        self._do_import()
+
+    @on(Button.Pressed, "#btn-bib-cancel")
+    def _cancel_btn(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    @on(Input.Submitted, "#bib-path-input")
+    def _submit(self, event: Input.Submitted) -> None:
+        self._do_import()
+
+    def _do_import(self) -> None:
+        path_str = self.query_one("#bib-path-input", Input).value.strip()
+        if not path_str:
+            self.notify("Please enter a file path.", severity="error")
+            return
+        p = Path(path_str).expanduser()
+        if not p.exists():
+            self.notify(f"File not found: {p}", severity="error")
+            return
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception as exc:
+            self.notify(f"Could not read file: {exc}", severity="error")
+            return
+        sources = parse_bibtex(text)
+        if not sources:
+            self.notify("No entries found in .bib file.", severity="warning")
+            return
+        self.dismiss(sources)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  Command palette
 # ════════════════════════════════════════════════════════════════════════
 
 
 class WriteCommands(Provider):
-    """Expose editor actions in the command palette."""
+    """Expose actions in the command palette for both screens."""
 
-    def _get_commands(self):
+    def _get_commands(self, include_hidden: bool = False):
+        """Return commands sorted alphabetically.
+
+        ``include_hidden`` adds commands that should only appear via
+        search (not in the initial discover list).
+        """
         screen = self.screen
-        if not isinstance(screen, EditorScreen):
-            return []
-        return [
-            ("Cite", "Insert a citation (Ctrl+J)", screen.action_cite),
-            ("Bibliography", "Insert bibliography from all sources", screen.action_bibliography),
-            ("Sources", "Manage sources", screen.action_sources),
-            ("Export", "Export document", screen.action_export_pdf),
-            ("Insert frontmatter", "Add YAML frontmatter properties", screen.action_insert_frontmatter),
-        ]
+        commands: list[tuple[str, str, object]] = []
+
+        if isinstance(screen, EditorScreen):
+            commands = [
+                ("Bibliography (Ctrl+L)", "Insert bibliography from all sources", screen.action_bibliography),
+                ("Cite (Ctrl+J)", "Insert a citation", screen.action_cite),
+                ("Export (Ctrl+R)", "Export document", screen.action_export_pdf),
+                ("Footnote (Ctrl+N)", "Insert footnote", screen.action_footnote),
+                ("Insert frontmatter", "Add YAML frontmatter properties", screen.action_insert_frontmatter),
+                ("Keybindings (Ctrl+H)", "Show keybindings panel", screen.action_toggle_help),
+                ("Quit to projects (Ctrl+Q)", "Save and return to project list", screen.action_close_project),
+                ("Save (Ctrl+S)", "Save document", screen.action_save),
+                ("Sources (Ctrl+O)", "Manage sources", screen.action_sources),
+            ]
+            if include_hidden:
+                commands.append(
+                    ("Import .bib file", "Import sources from a BibTeX file", screen.action_import_bib),
+                )
+        elif isinstance(screen, ProjectsScreen):
+            commands = [
+                ("Exports (e)", "Toggle exports view", screen.action_toggle_exports),
+                ("New project (n)", "Create a new project", screen.action_new_project),
+                ("Quit (q)", "Quit the application", screen.action_quit),
+            ]
+
+        commands.sort(key=lambda c: c[0].lower())
+        return commands
 
     async def discover(self) -> Hits:
-        for name, help_text, callback in self._get_commands():
-            yield Hit(1.0, name, callback, help=help_text)
+        for name, help_text, callback in self._get_commands(include_hidden=False):
+            yield DiscoveryHit(name, callback, help=help_text)
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
-        for name, help_text, callback in self._get_commands():
+        for name, help_text, callback in self._get_commands(include_hidden=True):
             score = matcher.match(name)
             if score > 0:
                 yield Hit(score, matcher.highlight(name), callback, help=help_text)
@@ -1902,6 +2275,10 @@ class WriteApp(App):
     """write. — a writing appliance for students."""
 
     COMMANDS = App.COMMANDS | {WriteCommands}
+    # Override App.BINDINGS to remove the priority ctrl+q → quit.
+    # Each screen now owns ctrl+q: EditorScreen → close_project,
+    # ProjectsScreen → quit.
+    BINDINGS = []
     TITLE = "write."
     CSS = """
     Screen {
@@ -1947,6 +2324,26 @@ class WriteApp(App):
         super().__init__()
         self.storage = Storage(data_dir)
         self.projects: list[Project] = []
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """Keep only Quit and Keybindings (renamed from Keys)."""
+        yield SystemCommand(
+            "Quit",
+            "Quit the application",
+            self.action_quit,
+        )
+        if screen.query("HelpPanel"):
+            yield SystemCommand(
+                "Keybindings",
+                "Hide the keybindings panel",
+                self.action_hide_help_panel,
+            )
+        else:
+            yield SystemCommand(
+                "Keybindings",
+                "Show keybindings for the focused widget",
+                self.action_show_help_panel,
+            )
 
     def on_mount(self) -> None:
         self.push_screen(ProjectsScreen())
