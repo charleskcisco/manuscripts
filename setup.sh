@@ -8,7 +8,7 @@
 #
 # Or, if you have pip access:
 #   pip install "textual[syntax]"
-# and skip the vendor directory entirely (write.py imports normally).
+# and skip the vendor directory entirely (manuscripts.py imports normally).
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

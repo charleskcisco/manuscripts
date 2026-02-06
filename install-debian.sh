@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-debian.sh — Install dependencies for write. on Debian/Ubuntu.
+# install-debian.sh — Install dependencies for manuscripts on Debian/Ubuntu.
 set -euo pipefail
 
 echo "==> Updating package lists…"
@@ -26,4 +26,4 @@ echo "==> Installing Python dependencies…"
 pip3 install --user textual
 
 echo ""
-echo "All dependencies installed. Run:  python3 write.py"
+echo "All dependencies installed. Run:  python3 manuscripts.py"

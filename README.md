@@ -1,10 +1,10 @@
-# write.
+# manuscripts
 
-A writing appliance for students. write. combines a Markdown editor, source management, and export in a single terminal application.
+A writing appliance for students. manuscripts combines a Markdown editor, source management, and export in a single terminal application.
 
 ## Philosophy
 
-Students shouldn't need to understand filesystems, BibTeX, or Zotero. They should think about **essays** and **sources**. write. provides:
+Students shouldn't need to understand filesystems, BibTeX, or Zotero. They should think about **essays** and **sources**. manuscripts provides:
 
 - **Projects, not files** — students see "Gatsby Essay," not `~/Documents/english/essay1.md`
 - **Simplified sources** — add a book by entering Author, Title, Year, Publisher. No BibTeX syntax.
@@ -24,7 +24,7 @@ Students shouldn't need to understand filesystems, BibTeX, or Zotero. They shoul
 pip install textual
 ```
 
-Then just run `python3 write.py`.
+Then just run `python3 manuscripts.py`.
 
 ### Option B: Vendored dependencies (no network needed)
 
@@ -39,18 +39,18 @@ Then:
 ```bash
 chmod +x setup.sh run.sh
 ./setup.sh     # unpacks into vendor/
-./run.sh       # launches write.
+./run.sh       # launches manuscripts
 ```
 
 ## Usage
 
 ```bash
-python3 write.py          # if textual is pip-installed
+python3 manuscripts.py    # if textual is pip-installed
 ./run.sh                   # if using vendored dependencies
-WRITE_DATA=~/essays ./run.sh   # custom data directory
+MANUSCRIPTS_DATA=~/essays ./run.sh   # custom data directory
 ```
 
-Data is stored in `~/.write/` by default. Exports go to `~/Documents/`.
+Data is stored in `~/.manuscripts/` by default. Exports go to `~/Documents/`.
 
 ## Keyboard Shortcuts
 
@@ -104,7 +104,7 @@ Chicago/Turabian style:
 
 ## Data Storage
 
-Projects are stored as JSON files in `~/.write/projects/`. Each project contains its text content and source metadata. No external database required.
+Projects are stored as JSON files in `~/.manuscripts/projects/`. Each project contains its text content and source metadata. No external database required.
 
 ## Architecture
 

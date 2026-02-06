@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for write. data models and citation formatting.
+Tests for manuscripts data models and citation formatting.
 """
 
 import json
@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
-from write import (
+from manuscripts import (
     Source, Project, Storage, fuzzy_filter,
     parse_yaml_frontmatter, resolve_reference_doc,
     detect_pandoc, detect_libreoffice,
@@ -217,13 +217,13 @@ def test_parse_yaml_frontmatter():
 
 def test_resolve_reference_doc():
     with tempfile.TemporaryDirectory() as tmpdir:
-        import write
-        orig_refs = write._REFS_DIR
+        import manuscripts
+        orig_refs = manuscripts._REFS_DIR
 
         # Create a fake refs dir
         fake_refs = Path(tmpdir) / "refs"
         fake_refs.mkdir()
-        write._REFS_DIR = fake_refs
+        manuscripts._REFS_DIR = fake_refs
 
         try:
             # No docs at all
@@ -250,7 +250,7 @@ def test_resolve_reference_doc():
             assert result.name == "double.docx"
             print("  Missing explicit spacing fallback OK")
         finally:
-            write._REFS_DIR = orig_refs
+            manuscripts._REFS_DIR = orig_refs
 
 
 def test_lua_filter_generation():

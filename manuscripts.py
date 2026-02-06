@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-write. — A writing appliance for students.
+Manuscripts — A writing appliance for students.
 
 A Markdown editor with integrated source management, Chicago citation
 insertion, and PDF export.  Built on Textual.
@@ -202,7 +202,7 @@ class Storage:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.projects_dir = base / "projects"
-        self.exports_dir = Path.home() / "Documents" / "write.exports"
+        self.exports_dir = Path.home() / "Documents" / "manuscripts.exports"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -956,7 +956,7 @@ class ProjectsScreen(Screen):
     def _refresh_list(self) -> None:
         ol: OptionList = self.query_one("#project-list", OptionList)
         ol.clear_options()
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         projects = app.storage.list_projects()
         app.projects = projects
         for p in projects:
@@ -971,7 +971,7 @@ class ProjectsScreen(Screen):
     def _refresh_exports(self) -> None:
         ol: OptionList = self.query_one("#export-file-list", OptionList)
         ol.clear_options()
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         export_dir = app.storage.exports_dir
         files: list[Path] = []
         for ext in ("*.pdf", "*.docx", "*.md"):
@@ -993,7 +993,7 @@ class ProjectsScreen(Screen):
     def open_project(self, event: OptionList.OptionSelected) -> None:
         if event.option_id == "__empty__":
             return
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         project = app.storage.load_project(event.option_id)
         if project:
             app.push_screen(EditorScreen(project))
@@ -1044,7 +1044,7 @@ class ProjectsScreen(Screen):
 
     def _on_project_created(self, name: str | None) -> None:
         if name:
-            app: WriteApp = self.app  # type: ignore[assignment]
+            app: ManuscriptsApp = self.app  # type: ignore[assignment]
             project = app.storage.create_project(name)
             app.push_screen(EditorScreen(project))
 
@@ -1053,7 +1053,7 @@ class ProjectsScreen(Screen):
             return
         ol: OptionList = self.query_one("#project-list", OptionList)
         idx = ol.highlighted
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         if idx is not None and idx < len(app.projects):
             project = app.projects[idx]
             self.app.push_screen(
@@ -1063,7 +1063,7 @@ class ProjectsScreen(Screen):
 
     def _do_delete(self, ok: bool, pid: str) -> None:
         if ok:
-            app: WriteApp = self.app  # type: ignore[assignment]
+            app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.delete_project(pid)
             self._refresh_list()
             self.notify("Manuscript deleted.")
@@ -1373,7 +1373,7 @@ class EditorScreen(Screen):
         self._do_save(notify=False)
 
     def _do_save(self, notify: bool = True) -> None:
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         self.project.content = self.query_one("#editor", TextArea).text
         app.storage.save_project(self.project)
         if notify:
@@ -1472,7 +1472,7 @@ class EditorScreen(Screen):
 
     def _on_sources_closed(self, _result: None) -> None:
         # Reload project in case sources changed
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         reloaded = app.storage.load_project(self.project.id)
         if reloaded:
             self.project = reloaded
@@ -1487,7 +1487,7 @@ class EditorScreen(Screen):
         if sources:
             for s in sources:
                 self.project.add_source(s)
-            app: WriteApp = self.app  # type: ignore[assignment]
+            app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.save_project(self.project)
             self.notify(f"Imported {len(sources)} source(s).")
 
@@ -1535,7 +1535,7 @@ class EditorScreen(Screen):
 
     @work(thread=True)
     def _run_export(self, export_format: str = "pdf") -> None:
-        app: WriteApp = self.app  # type: ignore[assignment]
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
         export_dir = app.storage.exports_dir
         safe_name = re.sub(r'[^\w\s-]', '', self.project.name).strip().replace(' ', '_')[:50] or "export"
 
@@ -1968,7 +1968,7 @@ class SourcesModal(ModalScreen[None]):
     def _on_source_added(self, source: Source | None) -> None:
         if source:
             self.project.add_source(source)
-            app: WriteApp = self.app  # type: ignore[assignment]
+            app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.save_project(self.project)
             self._refresh_list()
             self.notify(f"Added: {source.author}")
@@ -1980,7 +1980,7 @@ class SourcesModal(ModalScreen[None]):
         if idx is not None and idx < len(sources):
             s = sources[idx]
             self.project.remove_source(s.id)
-            app: WriteApp = self.app  # type: ignore[assignment]
+            app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.save_project(self.project)
             self._refresh_list()
             self.notify("Source deleted.")
@@ -2284,7 +2284,7 @@ class BibImportModal(ModalScreen[list[Source] | None]):
 # ════════════════════════════════════════════════════════════════════════
 
 
-class WriteCommands(Provider):
+class ManuscriptsCommands(Provider):
     """Expose actions in the command palette for both screens."""
 
     def _get_commands(self, include_hidden: bool = False):
@@ -2339,17 +2339,17 @@ class WriteCommands(Provider):
 # ════════════════════════════════════════════════════════════════════════
 
 
-class WriteApp(App):
-    """write. — a writing appliance for students."""
+class ManuscriptsApp(App):
+    """Manuscripts — a writing appliance for students."""
 
-    COMMANDS = App.COMMANDS | {WriteCommands}
+    COMMANDS = App.COMMANDS | {ManuscriptsCommands}
     # Override App.BINDINGS so ctrl+q and the command palette don't leak
     # into the keybindings panel.  EditorScreen has its own ctrl+p binding.
     BINDINGS = [
         Binding("ctrl+p", "command_palette", "Command Palette", show=False, system=True),
         Binding("ctrl+q", "quit", "Quit", show=False, system=True),
     ]
-    TITLE = "write."
+    TITLE = "Manuscripts"
     CSS = """
     Screen {
         background: #2a2a2a;
@@ -2400,7 +2400,7 @@ class WriteApp(App):
         self.projects: list[Project] = []
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
-        """Suppress default system commands; WriteCommands handles everything."""
+        """Suppress default system commands; ManuscriptsCommands handles everything."""
         return []
 
     def on_mount(self) -> None:
@@ -2413,12 +2413,12 @@ class WriteApp(App):
 
 
 def main() -> None:
-    if os.environ.get("WRITE_DATA"):
-        data_dir = Path(os.environ["WRITE_DATA"])
+    if os.environ.get("MANUSCRIPTS_DATA"):
+        data_dir = Path(os.environ["MANUSCRIPTS_DATA"])
     else:
-        data_dir = Path.home() / ".write"
+        data_dir = Path.home() / ".manuscripts"
 
-    app = WriteApp(data_dir)
+    app = ManuscriptsApp(data_dir)
     app.run()
 
 

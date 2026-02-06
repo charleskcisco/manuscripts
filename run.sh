@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# write. launcher — sets up vendored dependencies and runs the app.
+# manuscripts launcher — sets up vendored dependencies and runs the app.
 #
 # Usage:
 #   ./run.sh                    # normal run
-#   WRITE_DATA=~/essays ./run.sh   # custom data directory
+#   MANUSCRIPTS_DATA=~/essays ./run.sh   # custom data directory
 
 set -e
 
@@ -17,4 +17,4 @@ TEXTUAL_SRC="${SCRIPT_DIR}/vendor/textual/src"
 # Build PYTHONPATH
 export PYTHONPATH="${RICH_SRC}:${MDIT_SRC}:${TEXTUAL_SRC}:${PYTHONPATH:-}"
 
-exec python3 "${SCRIPT_DIR}/write.py" "$@"
+exec python3 "${SCRIPT_DIR}/manuscripts.py" "$@"
