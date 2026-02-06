@@ -1,0 +1,1627 @@
+#!/usr/bin/env python3
+"""
+Scribe — A writing appliance for students.
+
+A Markdown editor with integrated source management, Chicago citation
+insertion, and PDF export.  Built on Textual.
+
+Designed for write-decks running on Raspberry Pi, but works anywhere
+Python 3.9+ and a modern terminal are available.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Optional
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.reactive import reactive, var
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    OptionList,
+    Static,
+    TextArea,
+)
+from textual.widgets.option_list import Option
+
+# ════════════════════════════════════════════════════════════════════════
+#  Data Models
+# ════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class Source:
+    """A bibliographic source with simplified metadata."""
+
+    id: str
+    source_type: str  # book | article | website
+    author: str
+    title: str
+    year: str
+    # Book
+    publisher: str = ""
+    city: str = ""
+    # Article
+    journal: str = ""
+    volume: str = ""
+    issue: str = ""
+    pages: str = ""
+    # Website
+    url: str = ""
+    access_date: str = ""
+    site_name: str = ""
+
+    # ── Citation formatting (Chicago / Turabian) ──────────────────────
+
+    def to_citekey(self) -> str:
+        last = self.author.split(",")[0].split()[-1].lower() if self.author else "unknown"
+        return re.sub(r"[^a-z]", "", last) + self.year
+
+    def to_chicago_footnote(self, page: str = "") -> str:
+        a = self._author_first()
+        if self.source_type == "book":
+            c = f"{a}, *{self.title}*"
+            if self.city and self.publisher:
+                c += f" ({self.city}: {self.publisher}, {self.year})"
+            elif self.year:
+                c += f" ({self.year})"
+            if page:
+                c += f", {page}"
+            return c + "."
+        if self.source_type == "article":
+            c = f'{a}, "{self.title}," *{self.journal}*'
+            if self.volume:
+                c += f" {self.volume}"
+                if self.issue:
+                    c += f", no. {self.issue}"
+            if self.year:
+                c += f" ({self.year})"
+            if self.pages:
+                c += f": {self.pages}"
+            elif page:
+                c += f": {page}"
+            return c + "."
+        if self.source_type == "website":
+            c = f'{a}, "{self.title},"'
+            if self.site_name:
+                c += f" *{self.site_name}*,"
+            if self.access_date:
+                c += f" accessed {self.access_date},"
+            if self.url:
+                c += f" {self.url}"
+            return c.rstrip(",") + "."
+        return f"{a}, *{self.title}* ({self.year})."
+
+    def to_chicago_bibliography(self) -> str:
+        a = self._author_last()
+        if self.source_type == "book":
+            c = f"{a}. *{self.title}*."
+            if self.city and self.publisher:
+                c += f" {self.city}: {self.publisher}, {self.year}."
+            elif self.year:
+                c += f" {self.year}."
+            return c
+        if self.source_type == "article":
+            c = f'{a}. "{self.title}." *{self.journal}*'
+            if self.volume:
+                c += f" {self.volume}"
+                if self.issue:
+                    c += f", no. {self.issue}"
+            if self.year:
+                c += f" ({self.year})"
+            if self.pages:
+                c += f": {self.pages}"
+            return c + "."
+        if self.source_type == "website":
+            c = f'{a}. "{self.title}."'
+            if self.site_name:
+                c += f" *{self.site_name}*."
+            if self.access_date:
+                c += f" Accessed {self.access_date}."
+            if self.url:
+                c += f" {self.url}."
+            return c
+        return f"{a}. *{self.title}*. {self.year}."
+
+    # ── helpers ────────────────────────────────────────────────────────
+
+    def _author_first(self) -> str:
+        """First Last (for footnotes)."""
+        if not self.author:
+            return ""
+        if "," in self.author:
+            last, first = self.author.split(",", 1)
+            return f"{first.strip()} {last.strip()}"
+        return self.author
+
+    def _author_last(self) -> str:
+        """Last, First (for bibliography)."""
+        if not self.author:
+            return ""
+        if "," not in self.author:
+            parts = self.author.rsplit(" ", 1)
+            if len(parts) == 2:
+                return f"{parts[1]}, {parts[0]}"
+        return self.author
+
+
+@dataclass
+class Project:
+    """A writing project."""
+
+    id: str
+    name: str
+    created: str
+    modified: str
+    content: str = ""
+    sources: list = field(default_factory=list)
+
+    def get_sources(self) -> list[Source]:
+        out: list[Source] = []
+        for s in self.sources:
+            try:
+                out.append(Source(**s))
+            except TypeError:
+                continue
+        return out
+
+    def add_source(self, source: Source) -> None:
+        self.sources.append(asdict(source))
+
+    def remove_source(self, source_id: str) -> None:
+        self.sources = [s for s in self.sources if s.get("id") != source_id]
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Storage
+# ════════════════════════════════════════════════════════════════════════
+
+
+class Storage:
+    def __init__(self, base: Path) -> None:
+        self.base = base
+        self.projects_dir = base / "projects"
+        self.exports_dir = base / "exports"
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.exports_dir.mkdir(parents=True, exist_ok=True)
+
+    def list_projects(self) -> list[Project]:
+        projects: list[Project] = []
+        for p in self.projects_dir.glob("*.json"):
+            try:
+                with open(p) as f:
+                    projects.append(Project(**json.load(f)))
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+        return sorted(projects, key=lambda x: x.modified, reverse=True)
+
+    def save_project(self, project: Project) -> None:
+        project.modified = datetime.now().isoformat()
+        with open(self.projects_dir / f"{project.id}.json", "w") as f:
+            json.dump(asdict(project), f, indent=2)
+
+    def load_project(self, pid: str) -> Optional[Project]:
+        path = self.projects_dir / f"{pid}.json"
+        if path.exists():
+            with open(path) as f:
+                return Project(**json.load(f))
+        return None
+
+    def delete_project(self, pid: str) -> None:
+        path = self.projects_dir / f"{pid}.json"
+        if path.exists():
+            path.unlink()
+
+    def create_project(self, name: str) -> Project:
+        pid = datetime.now().strftime("%Y%m%d_%H%M%S")
+        now = datetime.now().isoformat()
+        p = Project(id=pid, name=name, created=now, modified=now)
+        self.save_project(p)
+        return p
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  PDF Export Helpers
+# ════════════════════════════════════════════════════════════════════════
+
+_REFS_DIR = Path(__file__).resolve().parent / "refs"
+_DEFAULT_REF = "double"
+
+
+def parse_yaml_frontmatter(content: str) -> dict:
+    """Extract key:value pairs from YAML frontmatter fenced by ---."""
+    m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+    if not m:
+        return {}
+    yaml: dict[str, str] = {}
+    for line in m.group(1).split("\n"):
+        idx = line.find(":")
+        if idx > 0:
+            key = line[:idx].strip()
+            val = line[idx + 1 :].strip()
+            # Strip surrounding quotes
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            yaml[key] = val
+    return yaml
+
+
+def resolve_reference_doc(yaml: dict) -> Optional[Path]:
+    """Return path to the reference .docx for pandoc, or None."""
+    if not _REFS_DIR.is_dir():
+        return None
+    # Explicit ref: field
+    if yaml.get("ref"):
+        p = _REFS_DIR / (yaml["ref"] + ".docx")
+        if p.exists():
+            return p
+    # Default
+    p = _REFS_DIR / (_DEFAULT_REF + ".docx")
+    if p.exists():
+        return p
+    # Any .docx
+    for p in sorted(_REFS_DIR.glob("*.docx")):
+        return p
+    return None
+
+
+def detect_pandoc() -> Optional[str]:
+    """Find the pandoc binary."""
+    found = shutil.which("pandoc")
+    if found:
+        return found
+    for p in [
+        "/usr/local/bin/pandoc",
+        "/opt/homebrew/bin/pandoc",
+        "/usr/bin/pandoc",
+        "/snap/bin/pandoc",
+    ]:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def detect_libreoffice() -> Optional[str]:
+    """Find the LibreOffice/soffice binary."""
+    if sys.platform == "darwin":
+        candidates = [
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+            "/usr/local/bin/soffice",
+        ]
+    else:
+        candidates = [
+            "/usr/bin/libreoffice",
+            "/usr/bin/soffice",
+            "/usr/local/bin/libreoffice",
+            "/snap/bin/libreoffice",
+        ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return shutil.which("libreoffice") or shutil.which("soffice")
+
+
+# ── Lua filter generators ─────────────────────────────────────────────
+
+
+def _lua_basic_filter() -> str:
+    """Page break before Bibliography/References/Works Cited headings."""
+    return """function Header(el)
+  local text = pandoc.utils.stringify(el)
+  if text:match("Bibliography") or text:match("References") or text:match("Works Cited") then
+    return pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:pStyle w:val="Heading%d"/>
+    <w:pageBreakBefore/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], el.level, text))
+  end
+  return el
+end"""
+
+
+def _lua_coverpage_filter(yaml: dict) -> str:
+    """Turabian-style cover page via OpenXML raw blocks."""
+    title = yaml.get("title", "").replace('"', '\\"')
+    author = yaml.get("author", "").replace('"', '\\"')
+    course = yaml.get("course", "").replace('"', '\\"')
+    instructor = yaml.get("instructor", "").replace('"', '\\"')
+    date = yaml.get("date", "").replace('"', '\\"')
+
+    return f"""-- Cover page format (Turabian style)
+local meta_title = "{title}"
+local meta_author = "{author}"
+local meta_course = "{course}"
+local meta_instructor = "{instructor}"
+local meta_date = "{date}"
+
+local function format_date(date_str)
+  local months = {{
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  }}
+  local year, month, day = date_str:match("(%d+)-(%d+)-(%d+)")
+  if year and month and day then
+    local month_name = months[tonumber(month)]
+    if month_name then
+      return string.format("%s %d, %s", month_name, tonumber(day), year)
+    end
+  end
+  return date_str
+end
+
+function Header(el)
+  local text = pandoc.utils.stringify(el)
+  if text:match("Bibliography") or text:match("References") or text:match("Works Cited") then
+    return pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:pStyle w:val="Heading%d"/>
+    <w:pageBreakBefore/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], el.level, text))
+  end
+  return el
+end
+
+function Meta(meta)
+  if meta.title and meta_title == "" then
+    meta_title = pandoc.utils.stringify(meta.title)
+  end
+  if meta.author and meta_author == "" then
+    meta_author = pandoc.utils.stringify(meta.author)
+  end
+  if meta.course and meta_course == "" then
+    meta_course = pandoc.utils.stringify(meta.course)
+  end
+  if meta.instructor and meta_instructor == "" then
+    meta_instructor = pandoc.utils.stringify(meta.instructor)
+  end
+  if meta.date and meta_date == "" then
+    meta_date = pandoc.utils.stringify(meta.date)
+  end
+  meta.author = nil
+  meta.date = nil
+  meta.title = nil
+  meta.course = nil
+  meta.instructor = nil
+  return meta
+end
+
+function Pandoc(doc)
+  local new_blocks = {{}}
+
+  if meta_title and meta_title ~= "" then
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:before="2400" w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], meta_title)))
+  end
+
+  local gap_before_author = 4320
+  local first_info = true
+
+  if meta_author and meta_author ~= "" then
+    local spacing_before = first_info and gap_before_author or 0
+    first_info = false
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:before="%d" w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], spacing_before, meta_author)))
+  end
+
+  if meta_course and meta_course ~= "" then
+    local spacing_before = first_info and gap_before_author or 0
+    first_info = false
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:before="%d" w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], spacing_before, meta_course)))
+  end
+
+  if meta_instructor and meta_instructor ~= "" then
+    local spacing_before = first_info and gap_before_author or 0
+    first_info = false
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:before="%d" w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], spacing_before, meta_instructor)))
+  end
+
+  if meta_date and meta_date ~= "" then
+    local formatted_date = format_date(meta_date)
+    local spacing_before = first_info and gap_before_author or 0
+    first_info = false
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:before="%d" w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], spacing_before, formatted_date)))
+  end
+
+  local page_break_inserted = false
+  for i, block in ipairs(doc.blocks) do
+    if not page_break_inserted then
+      if block.t == "Header" or
+         (block.t == "Para" and #block.content > 0) or
+         block.t == "CodeBlock" or
+         block.t == "BulletList" or
+         block.t == "OrderedList" or
+         block.t == "Table" or
+         block.t == "BlockQuote" or
+         block.t == "RawBlock" then
+        table.insert(new_blocks, pandoc.RawBlock('openxml', [[
+<w:p>
+  <w:pPr>
+    <w:pageBreakBefore/>
+  </w:pPr>
+</w:p>]]))
+        page_break_inserted = true
+      end
+    end
+    table.insert(new_blocks, block)
+  end
+
+  if not page_break_inserted then
+    table.insert(new_blocks, pandoc.RawBlock('openxml', [[
+<w:p>
+  <w:pPr>
+    <w:pageBreakBefore/>
+  </w:pPr>
+</w:p>]]))
+  end
+
+  doc.blocks = new_blocks
+  return doc
+end"""
+
+
+def _lua_header_filter(yaml: dict) -> str:
+    """MLA-style header block via OpenXML raw blocks."""
+    title = yaml.get("title", "").replace('"', '\\"')
+    author = yaml.get("author", "").replace('"', '\\"')
+    course = yaml.get("course", "").replace('"', '\\"')
+    instructor = yaml.get("instructor", "").replace('"', '\\"')
+    date = yaml.get("date", "").replace('"', '\\"')
+
+    return f"""-- MLA Header format
+local meta_title = "{title}"
+local meta_author = "{author}"
+local meta_course = "{course}"
+local meta_instructor = "{instructor}"
+local meta_date = "{date}"
+
+local function format_date(date_str)
+  local months = {{
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  }}
+  local year, month, day = date_str:match("(%d+)-(%d+)-(%d+)")
+  if year and month and day then
+    local month_name = months[tonumber(month)]
+    if month_name then
+      return string.format("%d %s %s", tonumber(day), month_name, year)
+    end
+  end
+  return date_str
+end
+
+function Header(el)
+  local text = pandoc.utils.stringify(el)
+  if text:match("Bibliography") or text:match("References") or text:match("Works Cited") then
+    return pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:pStyle w:val="Heading%d"/>
+    <w:pageBreakBefore/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], el.level, text))
+  end
+  return el
+end
+
+function Meta(meta)
+  if meta.title and meta_title == "" then
+    meta_title = pandoc.utils.stringify(meta.title)
+  end
+  if meta.author and meta_author == "" then
+    meta_author = pandoc.utils.stringify(meta.author)
+  end
+  if meta.course and meta_course == "" then
+    meta_course = pandoc.utils.stringify(meta.course)
+  end
+  if meta.instructor and meta_instructor == "" then
+    meta_instructor = pandoc.utils.stringify(meta.instructor)
+  end
+  if meta.date and meta_date == "" then
+    meta_date = pandoc.utils.stringify(meta.date)
+  end
+  meta.author = nil
+  meta.date = nil
+  meta.title = nil
+  meta.course = nil
+  meta.instructor = nil
+  return meta
+end
+
+function Pandoc(doc)
+  local new_blocks = {{}}
+
+  if meta_author and meta_author ~= "" then
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], meta_author)))
+  end
+
+  if meta_instructor and meta_instructor ~= "" then
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], meta_instructor)))
+  end
+
+  if meta_course and meta_course ~= "" then
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], meta_course)))
+  end
+
+  if meta_date and meta_date ~= "" then
+    local formatted_date = format_date(meta_date)
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], formatted_date)))
+  end
+
+  if meta_title and meta_title ~= "" then
+    table.insert(new_blocks, pandoc.RawBlock('openxml', string.format([[
+<w:p>
+  <w:pPr>
+    <w:spacing w:after="0" w:line="480" w:lineRule="auto"/>
+    <w:jc w:val="center"/>
+  </w:pPr>
+  <w:r>
+    <w:t>%s</w:t>
+  </w:r>
+</w:p>]], meta_title)))
+  end
+
+  for i, block in ipairs(doc.blocks) do
+    table.insert(new_blocks, block)
+  end
+
+  doc.blocks = new_blocks
+  return doc
+end"""
+
+
+def _generate_lua_filter(yaml: dict) -> str:
+    """Dispatch to the right Lua filter based on format: field."""
+    fmt = yaml.get("format", "")
+    if fmt == "coverpage":
+        return _lua_coverpage_filter(yaml)
+    if fmt == "header":
+        return _lua_header_filter(yaml)
+    return _lua_basic_filter()
+
+
+# ── DOCX post-processing ──────────────────────────────────────────────
+
+_EMPTY_HEADER_XML = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header"/>
+    </w:pPr>
+  </w:p>
+</w:hdr>"""
+
+_EMPTY_FOOTER_XML = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+    </w:pPr>
+  </w:p>
+</w:ftr>"""
+
+
+def _postprocess_docx(docx_path: str, yaml: dict) -> None:
+    """Strip headers/footers and replace {{LASTNAME}} in DOCX zip."""
+    fmt = yaml.get("format", "")
+    strip_headers = fmt != "header"  # strip for coverpage or blank
+    strip_footers = fmt == "header"  # strip only for header format
+
+    # Determine lastname replacement
+    author = yaml.get("author", "")
+    lastname = yaml.get("lastname", "")
+    if not lastname and author:
+        lastname = author.split()[-1] if author.split() else ""
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(docx_path, "r") as zin:
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                is_header = re.match(r"word/header\d*\.xml", item.filename)
+                is_footer = re.match(r"word/footer\d*\.xml", item.filename)
+
+                if strip_headers and is_header:
+                    data = _EMPTY_HEADER_XML
+                elif strip_footers and is_footer:
+                    data = _EMPTY_FOOTER_XML
+                elif is_header or is_footer:
+                    # Replace {{LASTNAME}} placeholder
+                    text = data.decode("utf-8")
+                    if lastname:
+                        text = text.replace("{{LASTNAME}} ", lastname + " ")
+                        text = text.replace("{{LASTNAME}}", lastname)
+                    else:
+                        text = text.replace("{{LASTNAME}} ", "")
+                        text = text.replace("{{LASTNAME}}", "")
+                    data = text.encode("utf-8")
+                zout.writestr(item, data)
+
+    with open(docx_path, "wb") as f:
+        f.write(buf.getvalue())
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Helper: fuzzy filter
+# ════════════════════════════════════════════════════════════════════════
+
+
+def fuzzy_filter(sources: list[Source], query: str) -> list[Source]:
+    if not query:
+        return list(sources)
+    q = query.lower()
+    scored: list[tuple[float, Source]] = []
+    for s in sources:
+        hay = f"{s.author} {s.title} {s.year}".lower()
+        if q in hay:
+            scored.append((100.0, s))
+        else:
+            ratio = SequenceMatcher(None, q, hay).ratio() * 100
+            if ratio > 30:
+                scored.append((ratio, s))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [s for _, s in scored]
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Source‑type field definitions
+# ════════════════════════════════════════════════════════════════════════
+
+SOURCE_TYPES = ["book", "article", "website"]
+
+SOURCE_FIELDS: dict[str, list[tuple[str, str]]] = {
+    "book": [
+        ("author", "Author (Last, First)"),
+        ("title", "Title"),
+        ("year", "Year"),
+        ("publisher", "Publisher"),
+        ("city", "City"),
+    ],
+    "article": [
+        ("author", "Author (Last, First)"),
+        ("title", "Title"),
+        ("year", "Year"),
+        ("journal", "Journal"),
+        ("volume", "Volume"),
+        ("issue", "Issue"),
+        ("pages", "Pages"),
+    ],
+    "website": [
+        ("author", "Author (Last, First)"),
+        ("title", "Title"),
+        ("year", "Year"),
+        ("site_name", "Website Name"),
+        ("url", "URL"),
+        ("access_date", "Access Date"),
+    ],
+}
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Screens
+# ════════════════════════════════════════════════════════════════════════
+
+
+# ── Projects ──────────────────────────────────────────────────────────
+
+
+class ProjectsScreen(Screen):
+    """Landing screen: list of writing projects."""
+
+    BINDINGS = [
+        Binding("n", "new_project", "New project"),
+        Binding("d", "delete_project", "Delete"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static(" Your Writing Projects", id="projects-title")
+        yield OptionList(id="project-list")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._refresh_list()
+
+    def _refresh_list(self) -> None:
+        ol: OptionList = self.query_one("#project-list", OptionList)
+        ol.clear_options()
+        app: ScribeApp = self.app  # type: ignore[assignment]
+        projects = app.storage.list_projects()
+        app.projects = projects
+        for p in projects:
+            try:
+                mod = datetime.fromisoformat(p.modified).strftime("%b %d, %Y")
+            except (ValueError, TypeError):
+                mod = ""
+            ol.add_option(Option(f"{p.name}  ({mod})", id=p.id))
+        if not projects:
+            ol.add_option(Option("  No projects yet — press n to create one.", id="__empty__"))
+
+    @on(OptionList.OptionSelected, "#project-list")
+    def open_project(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id == "__empty__":
+            return
+        app: ScribeApp = self.app  # type: ignore[assignment]
+        project = app.storage.load_project(event.option_id)
+        if project:
+            app.push_screen(EditorScreen(project))
+
+    def action_new_project(self) -> None:
+        self.app.push_screen(NewProjectModal(), callback=self._on_project_created)
+
+    def _on_project_created(self, name: str | None) -> None:
+        if name:
+            app: ScribeApp = self.app  # type: ignore[assignment]
+            project = app.storage.create_project(name)
+            app.push_screen(EditorScreen(project))
+
+    def action_delete_project(self) -> None:
+        ol: OptionList = self.query_one("#project-list", OptionList)
+        idx = ol.highlighted
+        app: ScribeApp = self.app  # type: ignore[assignment]
+        if idx is not None and idx < len(app.projects):
+            project = app.projects[idx]
+            self.app.push_screen(
+                ConfirmModal(f"Delete '{project.name}'?"),
+                callback=lambda ok: self._do_delete(ok, project.id),
+            )
+
+    def _do_delete(self, ok: bool, pid: str) -> None:
+        if ok:
+            app: ScribeApp = self.app  # type: ignore[assignment]
+            app.storage.delete_project(pid)
+            self._refresh_list()
+            self.notify("Project deleted.")
+
+    def action_quit(self) -> None:
+        self.app.exit()
+
+
+# ── New‑project modal ─────────────────────────────────────────────────
+
+
+class NewProjectModal(ModalScreen[str | None]):
+    """Prompt for a project name."""
+
+    DEFAULT_CSS = """
+    NewProjectModal {
+        align: center middle;
+    }
+    #new-project-box {
+        width: 50;
+        height: auto;
+        max-height: 12;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #new-project-box Label {
+        margin-bottom: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="new-project-box"):
+            yield Label("New Project")
+            yield Input(placeholder="Project name…", id="project-name-input")
+            with Horizontal():
+                yield Button("Create", variant="primary", id="btn-create")
+                yield Button("Cancel", id="btn-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#project-name-input", Input).focus()
+
+    @on(Button.Pressed, "#btn-create")
+    def _create(self, event: Button.Pressed) -> None:
+        val = self.query_one("#project-name-input", Input).value.strip()
+        self.dismiss(val if val else None)
+
+    @on(Button.Pressed, "#btn-cancel")
+    def _cancel(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    @on(Input.Submitted, "#project-name-input")
+    def _submit(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── Confirm modal ─────────────────────────────────────────────────────
+
+
+class ConfirmModal(ModalScreen[bool]):
+    DEFAULT_CSS = """
+    ConfirmModal {
+        align: center middle;
+    }
+    #confirm-box {
+        width: 50;
+        height: auto;
+        max-height: 10;
+        border: thick $error;
+        background: $surface;
+        padding: 1 2;
+    }
+    #confirm-box Label {
+        margin-bottom: 1;
+    }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Label(self.question)
+            with Horizontal():
+                yield Button("Yes", variant="error", id="btn-yes")
+                yield Button("No", variant="primary", id="btn-no")
+
+    def on_mount(self) -> None:
+        self.query_one("#btn-no", Button).focus()
+
+    @on(Button.Pressed, "#btn-yes")
+    def _yes(self, event: Button.Pressed) -> None:
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#btn-no")
+    def _no(self, event: Button.Pressed) -> None:
+        self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+# ── Editor ────────────────────────────────────────────────────────────
+
+
+class EditorScreen(Screen):
+    """The main writing screen."""
+
+    BINDINGS = [
+        Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+q", "close_project", "Close"),
+        Binding("ctrl+k", "cite", "Cite"),
+        Binding("ctrl+n", "footnote", "Footnote"),
+        Binding("ctrl+b", "bold", "Bold"),
+        Binding("ctrl+e", "export_pdf", "Export PDF"),
+        Binding("f2", "sources", "Sources"),
+    ]
+
+    AUTO_SAVE_SECONDS = 30.0
+
+    def __init__(self, project: Project) -> None:
+        super().__init__()
+        self.project = project
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield TextArea(
+            self.project.content,
+            id="editor",
+            soft_wrap=True,
+            show_line_numbers=False,
+            tab_behavior="indent",
+        )
+        yield Static(self._status_text(), id="editor-status")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#editor", TextArea).focus()
+        self.set_interval(self.AUTO_SAVE_SECONDS, self._auto_save)
+
+    def _status_text(self) -> str:
+        text = self.query_one("#editor", TextArea).text if self.is_mounted else self.project.content
+        wc = len(text.split()) if text.strip() else 0
+        return f" {self.project.name} │ {wc} words"
+
+    @on(TextArea.Changed, "#editor")
+    def _on_text_change(self, event: TextArea.Changed) -> None:
+        try:
+            self.query_one("#editor-status", Static).update(self._status_text())
+        except Exception:
+            pass
+
+    def _auto_save(self) -> None:
+        self._do_save(notify=False)
+
+    def _do_save(self, notify: bool = True) -> None:
+        app: ScribeApp = self.app  # type: ignore[assignment]
+        self.project.content = self.query_one("#editor", TextArea).text
+        app.storage.save_project(self.project)
+        if notify:
+            self.notify("Saved.")
+
+    # ── actions ────────────────────────────────────────────────────────
+
+    def action_save(self) -> None:
+        self._do_save()
+
+    def action_close_project(self) -> None:
+        self._do_save(notify=False)
+        self.app.pop_screen()
+        # Refresh the projects list if it's still there
+        try:
+            self.app.query_one(ProjectsScreen)._refresh_list()
+        except Exception:
+            pass
+
+    def action_bold(self) -> None:
+        ta = self.query_one("#editor", TextArea)
+        sel = ta.selected_text
+        if sel:
+            ta.replace(f"**{sel}**", *ta.selection)
+        else:
+            loc = ta.cursor_location
+            ta.insert("****")
+            # Move cursor between the asterisks
+            row, col = ta.cursor_location
+            ta.cursor_location = (row, col - 2)
+
+    def action_footnote(self) -> None:
+        ta = self.query_one("#editor", TextArea)
+        ta.insert("^[]")
+        row, col = ta.cursor_location
+        ta.cursor_location = (row, col - 1)
+
+    def action_cite(self) -> None:
+        sources = self.project.get_sources()
+        if not sources:
+            self.notify("No sources. Press F2 to add sources first.", severity="warning")
+            return
+        self.app.push_screen(
+            CitePickerModal(sources),
+            callback=self._insert_citation,
+        )
+
+    def _insert_citation(self, footnote_text: str | None) -> None:
+        if footnote_text:
+            ta = self.query_one("#editor", TextArea)
+            ta.insert(footnote_text)
+            self.notify("Citation inserted.")
+
+    def action_sources(self) -> None:
+        self._do_save(notify=False)
+        self.app.push_screen(
+            SourcesModal(self.project),
+            callback=self._on_sources_closed,
+        )
+
+    def _on_sources_closed(self, _result: None) -> None:
+        # Reload project in case sources changed
+        app: ScribeApp = self.app  # type: ignore[assignment]
+        reloaded = app.storage.load_project(self.project.id)
+        if reloaded:
+            self.project = reloaded
+
+    def action_export_pdf(self) -> None:
+        self._do_save(notify=False)
+        self._run_export()
+
+    @work(thread=True)
+    def _run_export(self) -> None:
+        app: ScribeApp = self.app  # type: ignore[assignment]
+        export_dir = app.storage.exports_dir
+
+        # 1. Parse YAML frontmatter
+        yaml = parse_yaml_frontmatter(self.project.content)
+
+        # 2. Detect external tools
+        pandoc = detect_pandoc()
+        if not pandoc:
+            self.app.call_from_thread(
+                self.notify,
+                "Pandoc not found. Install pandoc for PDF export.",
+                severity="warning",
+            )
+            return
+
+        libreoffice = detect_libreoffice()
+        if not libreoffice:
+            self.app.call_from_thread(
+                self.notify,
+                "LibreOffice not found. Install LibreOffice for PDF export.",
+                severity="warning",
+            )
+            return
+
+        # 3. Resolve reference doc
+        ref_doc = resolve_reference_doc(yaml)
+        if not ref_doc:
+            self.app.call_from_thread(
+                self.notify,
+                "No reference .docx found in refs/ directory.",
+                severity="error",
+            )
+            return
+
+        # Temp file paths
+        md_path = export_dir / f"{self.project.id}.md"
+        lua_path = export_dir / f"{self.project.id}_filter.lua"
+        docx_path = export_dir / f"{self.project.id}.docx"
+        pdf_path = export_dir / f"{self.project.id}.pdf"
+
+        try:
+            # 4. Write content as-is (student's own YAML is already in content)
+            with open(md_path, "w") as f:
+                f.write(self.project.content)
+
+            # 5. Generate Lua filter
+            lua_code = _generate_lua_filter(yaml)
+            with open(lua_path, "w") as f:
+                f.write(lua_code)
+
+            # 6. Build pandoc command
+            pandoc_args = [
+                pandoc,
+                str(md_path),
+                "--standalone",
+                f"--reference-doc={ref_doc}",
+                f"--lua-filter={lua_path}",
+            ]
+            if "bibliography" in yaml:
+                pandoc_args.append("--citeproc")
+            pandoc_args.extend(["-o", str(docx_path)])
+
+            self.app.call_from_thread(self.notify, "Converting to DOCX…")
+
+            result = subprocess.run(
+                pandoc_args, capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                self.app.call_from_thread(
+                    self.notify,
+                    f"Pandoc error: {result.stderr[:200]}",
+                    severity="error",
+                )
+                return
+
+            # 7. Post-process DOCX (non-fatal)
+            try:
+                _postprocess_docx(str(docx_path), yaml)
+            except Exception:
+                pass  # continue to PDF even if post-processing fails
+
+            # 8. Run LibreOffice
+            lo_args = [
+                libreoffice,
+                "--headless",
+                "--convert-to", "pdf",
+                "--outdir", str(export_dir),
+                str(docx_path),
+            ]
+            result = subprocess.run(
+                lo_args, capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                self.app.call_from_thread(
+                    self.notify,
+                    f"LibreOffice error: {result.stderr[:200]}",
+                    severity="error",
+                )
+                return
+
+            # 9. Notify success
+            self.app.call_from_thread(
+                self.notify, f"Exported to {pdf_path}"
+            )
+
+        except subprocess.TimeoutExpired:
+            self.app.call_from_thread(
+                self.notify, "Export timed out.", severity="error"
+            )
+        except Exception as exc:
+            self.app.call_from_thread(
+                self.notify,
+                f"Export failed: {str(exc)[:200]}",
+                severity="error",
+            )
+        finally:
+            # 10. Clean up intermediate files
+            for p in (md_path, lua_path, docx_path):
+                try:
+                    if p.exists():
+                        p.unlink()
+                except OSError:
+                    pass
+
+
+# ── Citation picker modal ─────────────────────────────────────────────
+
+
+class CitePickerModal(ModalScreen[str | None]):
+    """Fuzzy‑search sources and pick one to insert as a footnote."""
+
+    DEFAULT_CSS = """
+    CitePickerModal {
+        align: center middle;
+    }
+    #cite-box {
+        width: 70;
+        height: 20;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #cite-box Label {
+        margin-bottom: 1;
+    }
+    #cite-results {
+        height: 1fr;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, sources: list[Source]) -> None:
+        super().__init__()
+        self.all_sources = sources
+        self.filtered: list[Source] = list(sources)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="cite-box"):
+            yield Label("Insert Citation")
+            yield Input(placeholder="Search sources…", id="cite-search")
+            yield OptionList(id="cite-results")
+
+    def on_mount(self) -> None:
+        self._update_results("")
+        self.query_one("#cite-search", Input).focus()
+
+    @on(Input.Changed, "#cite-search")
+    def _search_changed(self, event: Input.Changed) -> None:
+        self._update_results(event.value)
+
+    def _update_results(self, query: str) -> None:
+        self.filtered = fuzzy_filter(self.all_sources, query)
+        ol: OptionList = self.query_one("#cite-results", OptionList)
+        ol.clear_options()
+        for s in self.filtered:
+            ol.add_option(Option(f"{s.author} ({s.year}) — {s.title}", id=s.id))
+
+    @on(OptionList.OptionSelected, "#cite-results")
+    def _select(self, event: OptionList.OptionSelected) -> None:
+        # Find the source
+        for s in self.filtered:
+            if s.id == event.option_id:
+                footnote = f"^[{s.to_chicago_footnote()}]"
+                self.dismiss(footnote)
+                return
+        self.dismiss(None)
+
+    @on(Input.Submitted, "#cite-search")
+    def _submit_search(self, event: Input.Submitted) -> None:
+        """Enter in search field picks the highlighted result."""
+        ol: OptionList = self.query_one("#cite-results", OptionList)
+        idx = ol.highlighted
+        if idx is not None and idx < len(self.filtered):
+            s = self.filtered[idx]
+            self.dismiss(f"^[{s.to_chicago_footnote()}]")
+            return
+        self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── Sources modal ─────────────────────────────────────────────────────
+
+
+class SourcesModal(ModalScreen[None]):
+    """View / add / delete sources for a project."""
+
+    DEFAULT_CSS = """
+    SourcesModal {
+        align: center middle;
+    }
+    #sources-box {
+        width: 80;
+        height: 24;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #sources-box Label {
+        margin-bottom: 1;
+    }
+    #source-list {
+        height: 1fr;
+    }
+    .sources-buttons {
+        height: 3;
+        dock: bottom;
+    }
+    .sources-buttons Button {
+        margin-right: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("a", "add_source", "Add"),
+        Binding("d", "delete_source", "Delete"),
+        Binding("escape", "close", "Close"),
+    ]
+
+    def __init__(self, project: Project) -> None:
+        super().__init__()
+        self.project = project
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sources-box"):
+            yield Label(f"Sources: {self.project.name}")
+            yield OptionList(id="source-list")
+            with Horizontal(classes="sources-buttons"):
+                yield Button("Add [a]", variant="primary", id="btn-add")
+                yield Button("Delete [d]", variant="error", id="btn-del")
+                yield Button("Close [Esc]", id="btn-close")
+
+    def on_mount(self) -> None:
+        self._refresh_list()
+
+    def _refresh_list(self) -> None:
+        ol: OptionList = self.query_one("#source-list", OptionList)
+        ol.clear_options()
+        sources = self.project.get_sources()
+        if not sources:
+            ol.add_option(Option("  No sources yet — press a to add one.", id="__empty__"))
+        else:
+            for s in sources:
+                ol.add_option(
+                    Option(f"{s.author} ({s.year}) — {s.title}", id=s.id)
+                )
+
+    @on(Button.Pressed, "#btn-add")
+    def _btn_add(self, event: Button.Pressed) -> None:
+        self.action_add_source()
+
+    @on(Button.Pressed, "#btn-del")
+    def _btn_del(self, event: Button.Pressed) -> None:
+        self.action_delete_source()
+
+    @on(Button.Pressed, "#btn-close")
+    def _btn_close(self, event: Button.Pressed) -> None:
+        self.action_close()
+
+    def action_add_source(self) -> None:
+        self.app.push_screen(
+            SourceFormModal(),
+            callback=self._on_source_added,
+        )
+
+    def _on_source_added(self, source: Source | None) -> None:
+        if source:
+            self.project.add_source(source)
+            app: ScribeApp = self.app  # type: ignore[assignment]
+            app.storage.save_project(self.project)
+            self._refresh_list()
+            self.notify(f"Added: {source.author}")
+
+    def action_delete_source(self) -> None:
+        ol: OptionList = self.query_one("#source-list", OptionList)
+        idx = ol.highlighted
+        sources = self.project.get_sources()
+        if idx is not None and idx < len(sources):
+            s = sources[idx]
+            self.project.remove_source(s.id)
+            app: ScribeApp = self.app  # type: ignore[assignment]
+            app.storage.save_project(self.project)
+            self._refresh_list()
+            self.notify("Source deleted.")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+# ── Source form modal ─────────────────────────────────────────────────
+
+
+class SourceFormModal(ModalScreen[Source | None]):
+    """Form for adding a new source."""
+
+    DEFAULT_CSS = """
+    SourceFormModal {
+        align: center middle;
+    }
+    #source-form-box {
+        width: 70;
+        height: auto;
+        max-height: 30;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #source-form-box Label {
+        margin-bottom: 1;
+    }
+    #source-type-bar {
+        height: 3;
+        margin-bottom: 1;
+    }
+    #source-type-bar Button {
+        margin-right: 1;
+    }
+    #source-fields {
+        height: auto;
+        max-height: 18;
+    }
+    .form-buttons {
+        height: 3;
+        margin-top: 1;
+    }
+    .form-buttons Button {
+        margin-right: 1;
+    }
+    .field-label {
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.current_type = "book"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="source-form-box"):
+            yield Label("Add Source")
+            with Horizontal(id="source-type-bar"):
+                yield Button("Book", variant="primary", id="btn-type-book")
+                yield Button("Article", id="btn-type-article")
+                yield Button("Website", id="btn-type-website")
+            with VerticalScroll(id="source-fields"):
+                yield from self._field_widgets("book")
+            with Horizontal(classes="form-buttons"):
+                yield Button("Save", variant="primary", id="btn-save")
+                yield Button("Cancel", id="btn-form-cancel")
+
+    def _field_widgets(self, stype: str):
+        for field_key, label in SOURCE_FIELDS[stype]:
+            yield Label(label, classes="field-label")
+            yield Input(placeholder=label, id=f"field-{field_key}")
+
+    def _switch_type(self, stype: str) -> None:
+        self.current_type = stype
+        # Update button variants
+        for t in SOURCE_TYPES:
+            btn = self.query_one(f"#btn-type-{t}", Button)
+            btn.variant = "primary" if t == stype else "default"
+        # Rebuild fields
+        container = self.query_one("#source-fields", VerticalScroll)
+        container.remove_children()
+        for field_key, label in SOURCE_FIELDS[stype]:
+            container.mount(Label(label, classes="field-label"))
+            container.mount(Input(placeholder=label, id=f"field-{field_key}"))
+
+    @on(Button.Pressed, "#btn-type-book")
+    def _type_book(self, event: Button.Pressed) -> None:
+        self._switch_type("book")
+
+    @on(Button.Pressed, "#btn-type-article")
+    def _type_article(self, event: Button.Pressed) -> None:
+        self._switch_type("article")
+
+    @on(Button.Pressed, "#btn-type-website")
+    def _type_website(self, event: Button.Pressed) -> None:
+        self._switch_type("website")
+
+    @on(Button.Pressed, "#btn-save")
+    def _save(self, event: Button.Pressed) -> None:
+        self._do_save()
+
+    @on(Button.Pressed, "#btn-form-cancel")
+    def _cancel_btn(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def _do_save(self) -> None:
+        data: dict[str, str] = {}
+        for field_key, _ in SOURCE_FIELDS[self.current_type]:
+            try:
+                inp = self.query_one(f"#field-{field_key}", Input)
+                data[field_key] = inp.value.strip()
+            except Exception:
+                data[field_key] = ""
+
+        if not data.get("author") or not data.get("title"):
+            self.notify("Author and Title are required.", severity="error")
+            return
+
+        source = Source(
+            id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+            source_type=self.current_type,
+            author=data.get("author", ""),
+            title=data.get("title", ""),
+            year=data.get("year", ""),
+            publisher=data.get("publisher", ""),
+            city=data.get("city", ""),
+            journal=data.get("journal", ""),
+            volume=data.get("volume", ""),
+            issue=data.get("issue", ""),
+            pages=data.get("pages", ""),
+            url=data.get("url", ""),
+            access_date=data.get("access_date", ""),
+            site_name=data.get("site_name", ""),
+        )
+        self.dismiss(source)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  App
+# ════════════════════════════════════════════════════════════════════════
+
+
+class ScribeApp(App):
+    """Scribe — a writing appliance for students."""
+
+    TITLE = "Scribe"
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+    #projects-title {
+        text-style: bold;
+        color: $accent;
+        padding: 1 2;
+    }
+    #project-list {
+        margin: 1 2;
+        height: 1fr;
+    }
+    #editor {
+        height: 1fr;
+    }
+    #editor-status {
+        dock: bottom;
+        height: 1;
+        background: $primary-background;
+        color: $text;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__()
+        self.storage = Storage(data_dir)
+        self.projects: list[Project] = []
+
+    def on_mount(self) -> None:
+        self.push_screen(ProjectsScreen())
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Entry point
+# ════════════════════════════════════════════════════════════════════════
+
+
+def main() -> None:
+    if os.environ.get("SCRIBE_DATA"):
+        data_dir = Path(os.environ["SCRIBE_DATA"])
+    else:
+        data_dir = Path.home() / ".scribe"
+
+    app = ScribeApp(data_dir)
+    app.run()
+
+
+if __name__ == "__main__":
+    main()
