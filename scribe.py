@@ -29,13 +29,12 @@ from typing import Optional
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive, var
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
-    Footer,
-    Header,
     Input,
     Label,
     ListItem,
@@ -824,10 +823,8 @@ class ProjectsScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Static(" Your Writing Projects", id="projects-title")
+        yield Static("Projects", id="projects-title")
         yield OptionList(id="project-list")
-        yield Footer()
 
     def on_mount(self) -> None:
         self._refresh_list()
@@ -898,10 +895,11 @@ class NewProjectModal(ModalScreen[str | None]):
         align: center middle;
     }
     #new-project-box {
-        width: 50;
+        width: 60%;
+        max-width: 60;
         height: auto;
         max-height: 12;
-        border: thick $accent;
+        border: solid #444;
         background: $surface;
         padding: 1 2;
     }
@@ -917,7 +915,7 @@ class NewProjectModal(ModalScreen[str | None]):
             yield Label("New Project")
             yield Input(placeholder="Project name…", id="project-name-input")
             with Horizontal():
-                yield Button("Create", variant="primary", id="btn-create")
+                yield Button("Create", id="btn-create")
                 yield Button("Cancel", id="btn-cancel")
 
     def on_mount(self) -> None:
@@ -950,10 +948,11 @@ class ConfirmModal(ModalScreen[bool]):
         align: center middle;
     }
     #confirm-box {
-        width: 50;
+        width: 60%;
+        max-width: 60;
         height: auto;
         max-height: 10;
-        border: thick $error;
+        border: solid #444;
         background: $surface;
         padding: 1 2;
     }
@@ -972,7 +971,7 @@ class ConfirmModal(ModalScreen[bool]):
             yield Label(self.question)
             with Horizontal():
                 yield Button("Yes", variant="error", id="btn-yes")
-                yield Button("No", variant="primary", id="btn-no")
+                yield Button("No", id="btn-no")
 
     def on_mount(self) -> None:
         self.query_one("#btn-no", Button).focus()
@@ -991,6 +990,22 @@ class ConfirmModal(ModalScreen[bool]):
 
 # ── Editor ────────────────────────────────────────────────────────────
 
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+
+
+class MarkdownTextArea(TextArea):
+    """TextArea with combined heading + inline markdown highlighting."""
+
+    def _build_highlight_map(self) -> None:
+        super()._build_highlight_map()
+        highlights = self._highlights
+        for i, line in enumerate(self.text.splitlines()):
+            m = _HEADING_RE.match(line)
+            if m:
+                marker_end = m.end(1)
+                highlights[i].append((0, marker_end, "heading.marker"))
+                highlights[i].append((marker_end + 1, len(line), "heading"))
+
 
 class EditorScreen(Screen):
     """The main writing screen."""
@@ -998,11 +1013,9 @@ class EditorScreen(Screen):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("ctrl+q", "close_project", "Close"),
-        Binding("ctrl+k", "cite", "Cite"),
+        Binding("ctrl+j", "cite", "Cite"),
         Binding("ctrl+n", "footnote", "Footnote"),
         Binding("ctrl+b", "bold", "Bold"),
-        Binding("ctrl+e", "export_pdf", "Export PDF"),
-        Binding("f2", "sources", "Sources"),
     ]
 
     AUTO_SAVE_SECONDS = 30.0
@@ -1012,8 +1025,7 @@ class EditorScreen(Screen):
         self.project = project
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield TextArea(
+        yield MarkdownTextArea(
             self.project.content,
             id="editor",
             soft_wrap=True,
@@ -1021,16 +1033,42 @@ class EditorScreen(Screen):
             tab_behavior="indent",
         )
         yield Static(self._status_text(), id="editor-status")
-        yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#editor", TextArea).focus()
+        ta = self.query_one("#editor", TextArea)
+        self._register_markdown_language(ta)
+        ta.focus()
         self.set_interval(self.AUTO_SAVE_SECONDS, self._auto_save)
+
+    @staticmethod
+    def _register_markdown_language(ta: TextArea) -> None:
+        """Register markdown with the inline grammar for bold/italic highlighting."""
+        try:
+            from tree_sitter import Language as TSLanguage
+            from tree_sitter_markdown import inline_language
+            lang = TSLanguage(inline_language())
+            highlight_query = (
+                "(strong_emphasis) @bold\n"
+                "(emphasis) @italic\n"
+                "(strikethrough) @strikethrough\n"
+                "(code_span) @inline_code\n"
+                "(inline_link (link_text) @link.label)\n"
+                "(inline_link (link_destination) @link.uri)\n"
+                "(shortcut_link (link_text) @link.label)\n"
+                "(full_reference_link (link_text) @link.label)\n"
+                "(full_reference_link (link_label) @link.label)\n"
+                "(image (image_description) @link.label)\n"
+                "(image (link_destination) @link.uri)\n"
+            )
+            ta.register_language("markdown_inline", lang, highlight_query)
+            ta.language = "markdown_inline"
+        except ImportError:
+            pass
 
     def _status_text(self) -> str:
         text = self.query_one("#editor", TextArea).text if self.is_mounted else self.project.content
         wc = len(text.split()) if text.strip() else 0
-        return f" {self.project.name} │ {wc} words"
+        return f" {self.project.name}  {wc} words"
 
     @on(TextArea.Changed, "#editor")
     def _on_text_change(self, event: TextArea.Changed) -> None:
@@ -1084,7 +1122,7 @@ class EditorScreen(Screen):
     def action_cite(self) -> None:
         sources = self.project.get_sources()
         if not sources:
-            self.notify("No sources. Press F2 to add sources first.", severity="warning")
+            self.notify("No sources. Open Sources from the command palette (Ctrl+P) first.", severity="warning")
             return
         self.app.push_screen(
             CitePickerModal(sources),
@@ -1096,6 +1134,20 @@ class EditorScreen(Screen):
             ta = self.query_one("#editor", TextArea)
             ta.insert(footnote_text)
             self.notify("Citation inserted.")
+
+    def action_bibliography(self) -> None:
+        sources = self.project.get_sources()
+        if not sources:
+            self.notify("No sources. Open Sources from the command palette (Ctrl+P) first.", severity="warning")
+            return
+        sorted_sources = sorted(sources, key=lambda s: s.author.split()[-1] if s.author else "")
+        lines = ["## Bibliography", ""]
+        for s in sorted_sources:
+            lines.append(s.to_chicago_bibliography())
+            lines.append("")
+        ta = self.query_one("#editor", TextArea)
+        ta.insert("\n".join(lines))
+        self.notify("Bibliography inserted.")
 
     def action_sources(self) -> None:
         self._do_save(notify=False)
@@ -1254,9 +1306,10 @@ class CitePickerModal(ModalScreen[str | None]):
         align: center middle;
     }
     #cite-box {
-        width: 70;
-        height: 20;
-        border: thick $accent;
+        width: 80%;
+        max-width: 80;
+        height: 70%;
+        border: solid #444;
         background: $surface;
         padding: 1 2;
     }
@@ -1332,9 +1385,10 @@ class SourcesModal(ModalScreen[None]):
         align: center middle;
     }
     #sources-box {
-        width: 80;
-        height: 24;
-        border: thick $accent;
+        width: 80%;
+        max-width: 90;
+        height: 80%;
+        border: solid #444;
         background: $surface;
         padding: 1 2;
     }
@@ -1368,7 +1422,7 @@ class SourcesModal(ModalScreen[None]):
             yield Label(f"Sources: {self.project.name}")
             yield OptionList(id="source-list")
             with Horizontal(classes="sources-buttons"):
-                yield Button("Add [a]", variant="primary", id="btn-add")
+                yield Button("Add [a]", id="btn-add")
                 yield Button("Delete [d]", variant="error", id="btn-del")
                 yield Button("Close [Esc]", id="btn-close")
 
@@ -1440,10 +1494,11 @@ class SourceFormModal(ModalScreen[Source | None]):
         align: center middle;
     }
     #source-form-box {
-        width: 70;
+        width: 80%;
+        max-width: 80;
         height: auto;
-        max-height: 30;
-        border: thick $accent;
+        max-height: 80%;
+        border: solid #444;
         background: $surface;
         padding: 1 2;
     }
@@ -1483,13 +1538,13 @@ class SourceFormModal(ModalScreen[Source | None]):
         with Vertical(id="source-form-box"):
             yield Label("Add Source")
             with Horizontal(id="source-type-bar"):
-                yield Button("Book", variant="primary", id="btn-type-book")
+                yield Button("Book", id="btn-type-book")
                 yield Button("Article", id="btn-type-article")
                 yield Button("Website", id="btn-type-website")
             with VerticalScroll(id="source-fields"):
                 yield from self._field_widgets("book")
             with Horizontal(classes="form-buttons"):
-                yield Button("Save", variant="primary", id="btn-save")
+                yield Button("Save", id="btn-save")
                 yield Button("Cancel", id="btn-form-cancel")
 
     def _field_widgets(self, stype: str):
@@ -1566,6 +1621,37 @@ class SourceFormModal(ModalScreen[Source | None]):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  Command palette
+# ════════════════════════════════════════════════════════════════════════
+
+
+class ScribeCommands(Provider):
+    """Expose editor actions in the command palette."""
+
+    def _get_commands(self):
+        screen = self.screen
+        if not isinstance(screen, EditorScreen):
+            return []
+        return [
+            ("Cite", "Insert a citation (Ctrl+J)", screen.action_cite),
+            ("Bibliography", "Insert bibliography from all sources", screen.action_bibliography),
+            ("Sources", "Manage sources", screen.action_sources),
+            ("Export PDF", "Export document to PDF", screen.action_export_pdf),
+        ]
+
+    async def discover(self) -> Hits:
+        for name, help_text, callback in self._get_commands():
+            yield DiscoveryHit(name, callback, help=help_text)
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for name, help_text, callback in self._get_commands():
+            score = matcher.match(name)
+            if score > 0:
+                yield Hit(score, matcher.highlight(name), callback, help=help_text)
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  App
 # ════════════════════════════════════════════════════════════════════════
 
@@ -1573,14 +1659,14 @@ class SourceFormModal(ModalScreen[Source | None]):
 class ScribeApp(App):
     """Scribe — a writing appliance for students."""
 
+    COMMANDS = App.COMMANDS | {ScribeCommands}
     TITLE = "Scribe"
     CSS = """
     Screen {
-        background: $surface;
+        background: #1a1a2e;
     }
     #projects-title {
-        text-style: bold;
-        color: $accent;
+        color: #e0e0e0;
         padding: 1 2;
     }
     #project-list {
@@ -1593,8 +1679,8 @@ class ScribeApp(App):
     #editor-status {
         dock: bottom;
         height: 1;
-        background: $primary-background;
-        color: $text;
+        background: #16213e;
+        color: #8a8a8a;
         padding: 0 2;
     }
     """
