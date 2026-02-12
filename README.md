@@ -50,7 +50,7 @@ python3 manuscripts.py    # if textual is pip-installed
 MANUSCRIPTS_DATA=~/essays ./run.sh   # custom data directory
 ```
 
-Data is stored in `~/.manuscripts/` by default. Exports go to `~/Documents/manuscripts.exports/`.
+Data is stored in `~/Documents/Manuscripts/` by default (projects and exports).
 
 ## Keyboard Shortcuts
 

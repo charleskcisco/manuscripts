@@ -230,7 +230,7 @@ class Storage:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.projects_dir = base / "projects"
-        self.exports_dir = Path.home() / "Documents" / "manuscripts.exports"
+        self.exports_dir = base / "exports"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2671,7 +2671,7 @@ def main() -> None:
     if os.environ.get("MANUSCRIPTS_DATA"):
         data_dir = Path(os.environ["MANUSCRIPTS_DATA"])
     else:
-        data_dir = Path.home() / ".manuscripts"
+        data_dir = Path.home() / "Documents" / "Manuscripts"
 
     app = ManuscriptsApp(data_dir)
     app.run()
