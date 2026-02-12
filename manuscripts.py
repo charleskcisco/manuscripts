@@ -1293,7 +1293,7 @@ _MANUSCRIPTS_THEME = TextAreaTheme(
         "inline_code": Style(color="#a0a0a0", bgcolor="#383838"),
         "heading": Style(bold=True, color="#e0af68"),
         "heading.marker": Style(color="#666666"),
-        "link.label": Style(color="#7aa2f7", underline=True),
+        "link.label": Style(color="#7aa2f7"),
         "link.uri": Style(color="#666666"),
     },
 )
