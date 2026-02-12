@@ -1,14 +1,14 @@
-# manuscripts
+# Manuscripts
 
-A writing appliance for students. manuscripts combines a Markdown editor, source management, and export in a single terminal application.
+A writing appliance for students. Manuscripts combines a Markdown editor, source management, Chicago/Turabian citations, and PDF export in a single terminal application.
 
 ## Philosophy
 
-Students shouldn't need to understand filesystems, BibTeX, or Zotero. They should think about **essays** and **sources**. manuscripts provides:
+Students shouldn't need to understand filesystems, BibTeX, or Zotero. They should think about **essays** and **sources**. Manuscripts provides:
 
 - **Projects, not files** — students see "Gatsby Essay," not `~/Documents/english/essay1.md`
-- **Simplified sources** — add a book by entering Author, Title, Year, Publisher. No BibTeX syntax.
-- **One-key citations** — press `Ctrl+J`, search, press Enter. A Chicago-format footnote appears.
+- **Simplified sources** — add a book by entering Author, Title, Year, Publisher. No BibTeX syntax required.
+- **One-key citations** — press `Ctrl+R`, search, press Enter. A Chicago-format footnote appears.
 - **Integrated export** — open the command palette (`Ctrl+P`) and select Export.
 
 ## Requirements
@@ -50,18 +50,33 @@ python3 manuscripts.py    # if textual is pip-installed
 MANUSCRIPTS_DATA=~/essays ./run.sh   # custom data directory
 ```
 
-Data is stored in `~/.manuscripts/` by default. Exports go to `~/Documents/`.
+Data is stored in `~/.manuscripts/` by default. Exports go to `~/Documents/manuscripts.exports/`.
 
 ## Keyboard Shortcuts
 
+### Projects Screen
+
+| Key | Action |
+|-----|--------|
+| n | New manuscript |
+| d | Delete manuscript |
+| e | Toggle exports view |
+
+Type in the search bar to filter manuscripts by name.
+
 ### Editor
 
-| Key       | Action                  |
-|-----------|-------------------------|
-| Ctrl+J    | Insert citation         |
-| Ctrl+N    | Insert footnote (`^[]`) |
-| Ctrl+B    | Bold (`**text**`)       |
-| Ctrl+P    | Command palette         |
+| Key | Action |
+|-----|--------|
+| Ctrl+R | Insert citation |
+| Ctrl+N | Insert blank footnote (`^[]`) |
+| Ctrl+B | Bold |
+| Ctrl+I | Italic |
+| Ctrl+O | Manage sources |
+| Ctrl+S | Save |
+| Ctrl+M | Return to manuscripts |
+| Ctrl+H | Toggle keybindings panel |
+| Ctrl+P | Command palette |
 
 ### Command Palette
 
@@ -86,7 +101,10 @@ style: chicago
 ## Source Types
 
 ### Book
-Author (Last, First), Title, Year, Publisher, City
+Author (Last, First), Title, Year, Publisher
+
+### Book Section
+Author (Last, First), Chapter Title, Book Title, Editor, Year, Publisher, Pages
 
 ### Article
 Author (Last, First), Title, Year, Journal, Volume, Issue, Pages
@@ -94,29 +112,23 @@ Author (Last, First), Title, Year, Journal, Volume, Issue, Pages
 ### Website
 Author (Last, First), Title, Year, Website Name, URL, Access Date
 
+Sources can also be imported from other manuscripts in your library.
+
 ## Citation Format
 
 Chicago/Turabian style:
 
-**Footnote:** F. Scott Fitzgerald, *The Great Gatsby* (New York: Scribner, 1925), 42.
+**Footnote:** F. Scott Fitzgerald, *The Great Gatsby* (Scribner, 1925), 42.
 
-**Bibliography:** Fitzgerald, F. Scott. *The Great Gatsby*. New York: Scribner, 1925.
+**Bibliography:** Fitzgerald, F. Scott. *The Great Gatsby*. Scribner, 1925.
+
+**Book section footnote:** John Smith, "My Chapter," in *The Big Book*, ed. Jane Doe (Oxford Press, 2020), 45-67.
+
+**Book section bibliography:** Smith, John. "My Chapter." In *The Big Book*, edited by Jane Doe, 45-67. Oxford Press, 2020.
 
 ## Data Storage
 
 Projects are stored as JSON files in `~/.manuscripts/projects/`. Each project contains its text content and source metadata. No external database required.
-
-## Architecture
-
-Built on [Textual](https://textual.textualize.io/), which provides:
-
-- `TextArea` widget with undo/redo, word wrap, selection, clipboard
-- `ModalScreen` for citation picker and source management
-- `OptionList` for project and source browsing
-- CSS-based styling
-- Proper async event handling
-
-The data layer (Source, Project, Storage) is framework-independent and can be tested without a terminal.
 
 ## License
 
