@@ -966,6 +966,7 @@ class ProjectsScreen(Screen):
         Binding("n", "new_project", "New manuscript"),
         Binding("d", "delete_project", "Delete"),
         Binding("e", "toggle_exports", "Exports"),
+        Binding("m", "mass_export_md", "Export all MD"),
         Binding("q", "quit", "Quit", show=False),
     ]
 
@@ -1008,7 +1009,7 @@ class ProjectsScreen(Screen):
             yield Static("Manuscripts", id="projects-title")
             yield Input(placeholder="Search manuscripts...", id="project-search")
             yield OptionList(id="project-list")
-            yield Static("(n) New  (d) Delete  (e) Exports", id="projects-hints")
+            yield Static("(n) New  (d) Delete  (e) Exports  (m) Export all MD", id="projects-hints")
         with Vertical(id="exports-view"):
             yield Static("Exports", id="exports-title")
             yield OptionList(id="export-file-list")
@@ -1166,6 +1167,33 @@ class ProjectsScreen(Screen):
             ev.styles.display = "none"
             pv.styles.display = "block"
             self.query_one("#project-list", OptionList).focus()
+
+    def action_mass_export_md(self) -> None:
+        if self._showing_exports:
+            return
+        if not self._all_projects:
+            self.notify("No manuscripts to export.", severity="warning")
+            return
+        self._do_mass_export_md()
+
+    @work(thread=True)
+    def _do_mass_export_md(self) -> None:
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
+        export_dir = app.storage.exports_dir
+        count = 0
+        for project in self._all_projects:
+            full = app.storage.load_project(project.id)
+            if not full or not full.content.strip():
+                continue
+            safe_name = re.sub(r'[^\w\s-]', '', full.name).strip().replace(' ', '_')[:50] or "export"
+            out = export_dir / f"{safe_name}.md"
+            with open(out, "w") as f:
+                f.write(full.content)
+            count += 1
+        self.app.call_from_thread(
+            self.notify,
+            f"Exported {count} manuscript{'s' if count != 1 else ''} as Markdown.",
+        )
 
     def action_quit(self) -> None:
         self.app.action_quit()
@@ -2166,19 +2194,19 @@ class SourceFormModal(ModalScreen[Source | None]):
         align: center middle;
     }
     #source-form-box {
-        width: 90%;
+        width: 95%;
         max-width: 100;
         height: 90%;
         border: solid #666;
         background: $surface;
         padding: 1 2;
     }
-    #source-form-box Label {
-        margin-bottom: 1;
+    #source-form-box > Label {
+        margin-bottom: 0;
     }
     #source-type-bar {
         height: 3;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
     #source-type-bar Button {
         margin-right: 1;
@@ -2198,12 +2226,12 @@ class SourceFormModal(ModalScreen[Source | None]):
         margin-right: 1;
     }
     .field-label {
-        margin-top: 1;
+        margin-top: 0;
     }
     #tab-hint {
         display: none;
         color: #777;
-        margin-top: 1;
+        margin-top: 0;
     }
     """
 
