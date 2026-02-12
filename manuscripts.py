@@ -1467,6 +1467,15 @@ class EditorScreen(Screen):
         wc = len(text.split()) if text.strip() else 0
         return f" {self.project.name}  {wc} words"
 
+    def _set_status(self, text: str) -> None:
+        try:
+            self.query_one("#editor-status", Static).update(text)
+        except Exception:
+            pass
+
+    def _restore_status(self) -> None:
+        self._set_status(self._status_text())
+
     @on(TextArea.Changed, "#editor")
     def _on_text_change(self, event: TextArea.Changed) -> None:
         self._dirty = True
@@ -1654,7 +1663,7 @@ class EditorScreen(Screen):
             out = export_dir / f"{safe_name}.md"
             with open(out, "w") as f:
                 f.write(self.project.content)
-            self.app.call_from_thread(self.notify, f"Exported to {out}")
+            self.app.call_from_thread(self._set_status, f" Exported: {out.name}")
             return
 
         # 1. Parse YAML frontmatter
@@ -1721,32 +1730,36 @@ class EditorScreen(Screen):
             pandoc_args.extend(["-o", str(docx_path)])
 
             if export_format == "pdf":
-                self.app.call_from_thread(self.notify, "Converting to PDF…")
+                self.app.call_from_thread(self._set_status, " Exporting… (1/3) Running pandoc")
             else:
-                self.app.call_from_thread(self.notify, "Converting to DOCX…")
+                self.app.call_from_thread(self._set_status, " Exporting… (1/2) Running pandoc")
 
             result = subprocess.run(
                 pandoc_args, capture_output=True, text=True, timeout=60
             )
             if result.returncode != 0:
                 self.app.call_from_thread(
-                    self.notify,
-                    f"Pandoc error: {result.stderr[:200]}",
-                    severity="error",
+                    self._set_status,
+                    f" Export failed: pandoc error",
                 )
                 return
 
             # 7. Post-process DOCX (non-fatal)
+            if export_format == "pdf":
+                self.app.call_from_thread(self._set_status, " Exporting… (2/3) Post-processing")
+            else:
+                self.app.call_from_thread(self._set_status, " Exporting… (2/2) Post-processing")
             try:
                 _postprocess_docx(str(docx_path), yaml)
             except Exception:
                 pass
 
             if export_format == "docx":
-                self.app.call_from_thread(self.notify, f"Exported to {docx_path}")
+                self.app.call_from_thread(self._set_status, f" Exported: {docx_path.name}")
                 return
 
             # 8. Run LibreOffice (PDF only)
+            self.app.call_from_thread(self._set_status, " Exporting… (3/3) Converting to PDF")
             lo_args = [
                 libreoffice,
                 "--headless",
@@ -1759,23 +1772,21 @@ class EditorScreen(Screen):
             )
             if result.returncode != 0:
                 self.app.call_from_thread(
-                    self.notify,
-                    f"LibreOffice error: {result.stderr[:200]}",
-                    severity="error",
+                    self._set_status,
+                    " Export failed: LibreOffice error",
                 )
                 return
 
-            self.app.call_from_thread(self.notify, f"Exported to {pdf_path}")
+            self.app.call_from_thread(self._set_status, f" Exported: {pdf_path.name}")
 
         except subprocess.TimeoutExpired:
             self.app.call_from_thread(
-                self.notify, "Export timed out.", severity="error"
+                self._set_status, " Export failed: timed out"
             )
         except Exception as exc:
             self.app.call_from_thread(
-                self.notify,
-                f"Export failed: {str(exc)[:200]}",
-                severity="error",
+                self._set_status,
+                f" Export failed: {str(exc)[:80]}",
             )
         finally:
             # Clean up intermediate files (keep the final output)
