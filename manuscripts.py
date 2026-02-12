@@ -1011,7 +1011,7 @@ class ProjectsScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="projects-view"):
             yield Static("Manuscripts", id="projects-title")
-            yield Input(placeholder="Search manuscripts...", id="project-search")
+            yield Input(placeholder="Search manuscripts… (Enter to open)", id="project-search")
             yield OptionList(id="project-list")
             yield Static(self._HINTS_DEFAULT, id="projects-hints")
         with Vertical(id="exports-view"):
@@ -1067,6 +1067,15 @@ class ProjectsScreen(Screen):
     @on(Input.Changed, "#project-search")
     def _search_changed(self, event: Input.Changed) -> None:
         self._refresh_list(filter_query=event.value)
+
+    @on(Input.Submitted, "#project-search")
+    def _search_submitted(self, event: Input.Submitted) -> None:
+        if self._filtered_projects:
+            p = self._filtered_projects[0]
+            app: ManuscriptsApp = self.app  # type: ignore[assignment]
+            project = app.storage.load_project(p.id)
+            if project:
+                app.push_screen(EditorScreen(project))
 
     def on_key(self, event) -> None:
         """Down arrow in search input moves focus to the project list."""
@@ -1321,7 +1330,11 @@ class ConfirmModal(ModalScreen[bool]):
         border-title-color: #e0e0e0;
     }
     """
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+    BINDINGS = [
+        Binding("y", "confirm_yes", "Yes", priority=True),
+        Binding("n", "confirm_no", "No", priority=True),
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
 
     def __init__(self, question: str) -> None:
         super().__init__()
@@ -1332,8 +1345,8 @@ class ConfirmModal(ModalScreen[bool]):
         box.border_title = self.question
         with box:
             with Horizontal():
-                yield Button("Yes", variant="error", id="btn-yes")
-                yield Button("No", id="btn-no")
+                yield Button("Yes [y]", variant="error", id="btn-yes")
+                yield Button("No [n]", id="btn-no")
 
     def on_mount(self) -> None:
         self.query_one("#btn-no", Button).focus()
@@ -1344,6 +1357,12 @@ class ConfirmModal(ModalScreen[bool]):
 
     @on(Button.Pressed, "#btn-no")
     def _no(self, event: Button.Pressed) -> None:
+        self.dismiss(False)
+
+    def action_confirm_yes(self) -> None:
+        self.dismiss(True)
+
+    def action_confirm_no(self) -> None:
         self.dismiss(False)
 
     def action_cancel(self) -> None:
@@ -2103,15 +2122,16 @@ class SourcesModal(ModalScreen[None]):
     """
 
     BINDINGS = [
-        Binding("a", "add_source", "Add"),
-        Binding("d", "delete_source", "Delete"),
-        Binding("i", "import_sources", "Import"),
+        Binding("a", "add_source", "Add", priority=True),
+        Binding("d", "delete_source", "Delete", priority=True),
+        Binding("i", "import_sources", "Import", priority=True),
         Binding("escape", "close", "Close", show=False),
     ]
 
     def __init__(self, project: Project) -> None:
         super().__init__()
         self.project = project
+        self._delete_pending = 0.0
 
     def compose(self) -> ComposeResult:
         box = Vertical(id="sources-box")
@@ -2174,13 +2194,28 @@ class SourcesModal(ModalScreen[None]):
         ol: OptionList = self.query_one("#source-list", OptionList)
         idx = ol.highlighted
         sources = self.project.get_sources()
-        if idx is not None and idx < len(sources):
+        if idx is None or idx >= len(sources):
+            return
+        import time
+        now = time.monotonic()
+        if now - self._delete_pending < 2.0:
+            self._delete_pending = 0.0
+            self.query_one("#btn-del", Button).label = "Delete [d]"
             s = sources[idx]
             self.project.remove_source(s.id)
             app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.save_project(self.project)
             self._refresh_list()
             self.notify("Source deleted.")
+        else:
+            self._delete_pending = now
+            self.query_one("#btn-del", Button).label = "Confirm? [d]"
+            self.set_timer(2.0, self._reset_delete_hint)
+
+    def _reset_delete_hint(self) -> None:
+        if self._delete_pending:
+            self._delete_pending = 0.0
+            self.query_one("#btn-del", Button).label = "Delete [d]"
 
     def action_import_sources(self) -> None:
         app: ManuscriptsApp = self.app  # type: ignore[assignment]
@@ -2279,10 +2314,10 @@ class SourceFormModal(ModalScreen[Source | None]):
         box.border_title = "Add Source"
         with box:
             with Horizontal(id="source-type-bar"):
-                yield Button("Book", id="btn-type-book")
-                yield Button("Book Section", id="btn-type-book_section")
-                yield Button("Article", id="btn-type-article")
-                yield Button("Website", id="btn-type-website")
+                yield Button("Book [b]", id="btn-type-book")
+                yield Button("Section [s]", id="btn-type-book_section")
+                yield Button("Article [a]", id="btn-type-article")
+                yield Button("Website [w]", id="btn-type-website")
             with VerticalScroll(id="source-fields"):
                 for stype in SOURCE_TYPES:
                     for field_key, label in SOURCE_FIELDS[stype]:
@@ -2290,6 +2325,14 @@ class SourceFormModal(ModalScreen[Source | None]):
             with Horizontal(classes="form-buttons"):
                 yield Button("Save", id="btn-save")
                 yield Button("Cancel", id="btn-form-cancel")
+
+    def on_key(self, event) -> None:
+        if isinstance(self.app.focused, Input):
+            return
+        shortcuts = {"b": "book", "s": "book_section", "a": "article", "w": "website"}
+        if event.key in shortcuts:
+            self._switch_type(shortcuts[event.key])
+            event.prevent_default()
 
     def _switch_type(self, stype: str) -> None:
         self.current_type = stype
@@ -2535,7 +2578,10 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
     }
     """
 
-    BINDINGS = [Binding("escape", "go_back", "Back", show=False)]
+    BINDINGS = [
+        Binding("a", "import_all", "Import All", priority=True),
+        Binding("escape", "go_back", "Back", show=False),
+    ]
 
     def __init__(self, projects: list[Project]) -> None:
         super().__init__()
@@ -2550,8 +2596,8 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
         with box:
             yield OptionList(id="import-list")
             with Horizontal(classes="import-buttons"):
-                yield Button("Import All", id="btn-import-all")
-                yield Button("Back", id="btn-import-back")
+                yield Button("Import All [a]", id="btn-import-all")
+                yield Button("Back [Esc]", id="btn-import-back")
 
     def on_mount(self) -> None:
         self._show_projects()
@@ -2604,6 +2650,9 @@ class ImportSourcesModal(ModalScreen[list[Source] | None]):
 
     @on(Button.Pressed, "#btn-import-all")
     def _import_all(self, event: Button.Pressed) -> None:
+        self.action_import_all()
+
+    def action_import_all(self) -> None:
         if self._phase == "sources" and self._sources:
             self.dismiss(list(self._sources))
 
