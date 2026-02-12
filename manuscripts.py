@@ -963,9 +963,10 @@ class ProjectsScreen(Screen):
 
     BINDINGS = [
         Binding("n", "new_project", "New manuscript"),
+        Binding("r", "rename_project", "Rename"),
         Binding("d", "delete_project", "Delete"),
         Binding("e", "toggle_exports", "Exports"),
-        Binding("m", "mass_export_md", "Export all to .md"),
+        Binding("m", "mass_export_md", "Export all to .md", show=False),
         Binding("q", "quit", "Quit", show=False),
     ]
 
@@ -996,19 +997,23 @@ class ProjectsScreen(Screen):
     }
     """
 
+    _HINTS_DEFAULT = "(n) New  (r) Rename  (d) Delete  (e) Exports"
+    _HINTS_MASS_MD = "(n) New  (r) Rename  (d) Delete  (e) Exports  (m) Export all to .md"
+
     def __init__(self) -> None:
         super().__init__()
         self._showing_exports = False
         self._export_paths: list[Path] = []
         self._all_projects: list[Project] = []
         self._filtered_projects: list[Project] = []
+        self._mass_export_pending = 0.0
 
     def compose(self) -> ComposeResult:
         with Vertical(id="projects-view"):
             yield Static("Manuscripts", id="projects-title")
             yield Input(placeholder="Search manuscripts...", id="project-search")
             yield OptionList(id="project-list")
-            yield Static("(n) New  (d) Delete  (e) Exports  (m) Export all to .md", id="projects-hints")
+            yield Static(self._HINTS_DEFAULT, id="projects-hints")
         with Vertical(id="exports-view"):
             yield Static("Exports", id="exports-title")
             yield OptionList(id="export-file-list")
@@ -1153,6 +1158,31 @@ class ProjectsScreen(Screen):
             self._refresh_list(filter_query=query)
             self.notify("Manuscript deleted.")
 
+    def action_rename_project(self) -> None:
+        if self._showing_exports:
+            return
+        ol: OptionList = self.query_one("#project-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and idx < len(self._filtered_projects):
+            project = self._filtered_projects[idx]
+            self.app.push_screen(
+                NewProjectModal(title="Rename", placeholder=project.name, button="Rename"),
+                callback=lambda name: self._do_rename(name, project.id),
+            )
+
+    def _do_rename(self, new_name: str | None, pid: str) -> None:
+        if not new_name:
+            return
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
+        project = app.storage.load_project(pid)
+        if project:
+            project.name = new_name
+            app.storage.save_project(project)
+            self._load_all_projects()
+            query = self.query_one("#project-search", Input).value
+            self._refresh_list(filter_query=query)
+            self.notify(f"Renamed to '{new_name}'.")
+
     def action_toggle_exports(self) -> None:
         pv = self.query_one("#projects-view")
         ev = self.query_one("#exports-view")
@@ -1170,10 +1200,18 @@ class ProjectsScreen(Screen):
     def action_mass_export_md(self) -> None:
         if self._showing_exports:
             return
-        if not self._all_projects:
-            self.notify("No manuscripts to export.", severity="warning")
-            return
-        self._do_mass_export_md()
+        import time
+        now = time.monotonic()
+        if now - self._mass_export_pending < 2.0:
+            self._mass_export_pending = 0.0
+            self.query_one("#projects-hints", Static).update(self._HINTS_DEFAULT)
+            if not self._all_projects:
+                self.notify("No manuscripts to export.", severity="warning")
+                return
+            self._do_mass_export_md()
+        else:
+            self._mass_export_pending = now
+            self.query_one("#projects-hints", Static).update(self._HINTS_MASS_MD)
 
     @work(thread=True)
     def _do_mass_export_md(self) -> None:
@@ -1202,7 +1240,7 @@ class ProjectsScreen(Screen):
 
 
 class NewProjectModal(ModalScreen[str | None]):
-    """Prompt for a project name."""
+    """Prompt for a project name (also used for rename)."""
 
     DEFAULT_CSS = """
     NewProjectModal {
@@ -1222,13 +1260,19 @@ class NewProjectModal(ModalScreen[str | None]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
+    def __init__(self, title: str = "New Manuscript", placeholder: str = "Manuscript name…", button: str = "Create") -> None:
+        super().__init__()
+        self._title = title
+        self._placeholder = placeholder
+        self._button = button
+
     def compose(self) -> ComposeResult:
         box = Vertical(id="new-project-box")
-        box.border_title = "New Manuscript"
+        box.border_title = self._title
         with box:
-            yield Input(placeholder="Manuscript name…", id="project-name-input")
+            yield Input(placeholder=self._placeholder, id="project-name-input")
             with Horizontal():
-                yield Button("Create", id="btn-create")
+                yield Button(self._button, id="btn-create")
                 yield Button("Cancel", id="btn-cancel")
 
     def on_mount(self) -> None:
