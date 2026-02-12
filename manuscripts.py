@@ -1011,14 +1011,18 @@ class ProjectsScreen(Screen):
             yield OptionList(id="export-file-list")
 
     def on_mount(self) -> None:
+        self._load_all_projects()
         self._refresh_list()
+
+    def _load_all_projects(self) -> None:
+        """Read projects from disk into cache."""
+        app: ManuscriptsApp = self.app  # type: ignore[assignment]
+        self._all_projects = app.storage.list_projects()
+        app.projects = self._all_projects
 
     def _refresh_list(self, filter_query: str = "") -> None:
         ol: OptionList = self.query_one("#project-list", OptionList)
         ol.clear_options()
-        app: ManuscriptsApp = self.app  # type: ignore[assignment]
-        self._all_projects = app.storage.list_projects()
-        app.projects = self._all_projects
         self._filtered_projects = fuzzy_filter_projects(self._all_projects, filter_query)
         for p in self._filtered_projects:
             try:
@@ -1141,6 +1145,7 @@ class ProjectsScreen(Screen):
         if ok:
             app: ManuscriptsApp = self.app  # type: ignore[assignment]
             app.storage.delete_project(pid)
+            self._load_all_projects()
             query = self.query_one("#project-search", Input).value
             self._refresh_list(filter_query=query)
             self.notify("Manuscript deleted.")
@@ -1392,6 +1397,7 @@ class EditorScreen(Screen):
     def __init__(self, project: Project) -> None:
         super().__init__()
         self.project = project
+        self._dirty = False
 
     def compose(self) -> ComposeResult:
         yield MarkdownTextArea(
@@ -1441,18 +1447,22 @@ class EditorScreen(Screen):
 
     @on(TextArea.Changed, "#editor")
     def _on_text_change(self, event: TextArea.Changed) -> None:
+        self._dirty = True
         try:
             self.query_one("#editor-status", Static).update(self._status_text())
         except Exception:
             pass
 
     def _auto_save(self) -> None:
+        if not self._dirty:
+            return
         self._do_save(notify=False)
 
     def _do_save(self, notify: bool = True) -> None:
         app: ManuscriptsApp = self.app  # type: ignore[assignment]
         self.project.content = self.query_one("#editor", TextArea).text
         app.storage.save_project(self.project)
+        self._dirty = False
         if notify:
             self.notify("Saved.")
 
@@ -1478,7 +1488,9 @@ class EditorScreen(Screen):
         self.app.pop_screen()
         # Refresh the projects list if it's still there
         try:
-            self.app.query_one(ProjectsScreen)._refresh_list()
+            ps = self.app.query_one(ProjectsScreen)
+            ps._load_all_projects()
+            ps._refresh_list()
         except Exception:
             pass
 
