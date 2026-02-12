@@ -2700,7 +2700,7 @@ class ManuscriptsApp(App):
             self.exit()
         else:
             self._quit_pending = now
-            self.notify("Press Ctrl+Q again to quit.")
+            self.notify("Press again to quit.")
 
     def on_mount(self) -> None:
         self.push_screen(ProjectsScreen())
