@@ -1407,8 +1407,8 @@ class MarkdownTextArea(TextArea):
     ]
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self._ts_timer = None
+        super().__init__(*args, **kwargs)
 
     def _on_key(self, event) -> None:
         if event.key == "escape":
