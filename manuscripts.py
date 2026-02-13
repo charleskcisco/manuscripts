@@ -1067,6 +1067,44 @@ class MarkdownLexer(PtLexer):
 # ════════════════════════════════════════════════════════════════════════
 
 
+def _word_wrap_boundaries(text, width):
+    """Return list of source-char indices where each visual line starts.
+
+    For example, a line that wraps into 3 visual lines returns [0, s1, s2]
+    where s1 and s2 are the source indices of the first char on lines 2 & 3.
+    Also returns padding_inserts for the processor.
+    """
+    if not text or width <= 0 or len(text) <= width:
+        return [0], []
+
+    line_starts = [0]
+    padding_inserts = []  # (source_index_of_space, pad_count)
+    x = 0
+    last_space_i = None
+    last_space_x = 0
+
+    for i, c in enumerate(text):
+        cw = get_cwidth(c)
+        if x + cw > width:
+            if last_space_i is not None:
+                pad = width - last_space_x - 1
+                if pad > 0:
+                    padding_inserts.append((last_space_i, pad))
+                line_starts.append(last_space_i + 1)
+                x = x - last_space_x - 1
+                last_space_i = None
+                last_space_x = 0
+            else:
+                line_starts.append(i)
+                x = x % width if width else 0
+        if c == ' ':
+            last_space_i = i
+            last_space_x = x
+        x += cw
+
+    return line_starts, padding_inserts
+
+
 class WordWrapProcessor(Processor):
     """Insert padding at word boundaries so character-level wrap becomes word wrap."""
 
@@ -1075,33 +1113,11 @@ class WordWrapProcessor(Processor):
         if not width or width <= 0:
             return Transformation(ti.fragments)
 
-        # Get the plain text to find wrap points.
         text = ''.join(t for _, t, *__ in ti.fragments)
         if not text or len(text) <= width:
             return Transformation(ti.fragments)
 
-        # Walk through text to find where padding is needed.
-        padding_inserts = []  # (source_index_of_space, pad_count)
-        x = 0
-        last_space_i = None
-        last_space_x = 0
-
-        for i, c in enumerate(text):
-            cw = get_cwidth(c)
-            if x + cw > width:
-                if last_space_i is not None:
-                    pad = width - last_space_x - 1
-                    if pad > 0:
-                        padding_inserts.append((last_space_i, pad))
-                    x = x - last_space_x - 1
-                    last_space_i = None
-                    last_space_x = 0
-                else:
-                    x = x % width if width else 0
-            if c == ' ':
-                last_space_i = i
-                last_space_x = x
-            x += cw
+        _, padding_inserts = _word_wrap_boundaries(text, width)
 
         if not padding_inserts:
             return Transformation(ti.fragments)
@@ -2734,6 +2750,67 @@ def create_app(storage):
                     action()
 
         asyncio.ensure_future(_do_full())
+
+    # ── Visual-line cursor movement ─────────────────────────────────
+
+    def _editor_width():
+        ri = editor_area.window.render_info
+        return ri.window_width if ri else 60
+
+    @kb.add("up", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        doc = buf.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        width = _editor_width()
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, width)
+        # Find which visual line the cursor is on.
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        visual_col = col - starts[vline]
+        if vline > 0:
+            # Move up within the same paragraph.
+            prev_start = starts[vline - 1]
+            prev_end = starts[vline] - 1
+            new_col = min(prev_start + visual_col, prev_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row, new_col)
+        elif row > 0:
+            # Move to last visual line of previous paragraph.
+            prev_line = doc.lines[row - 1]
+            prev_starts, _ = _word_wrap_boundaries(prev_line, width)
+            last_start = prev_starts[-1]
+            new_col = min(last_start + visual_col, len(prev_line))
+            buf.cursor_position = doc.translate_row_col_to_index(row - 1, new_col)
+
+    @kb.add("down", filter=is_editor & no_float)
+    def _(event):
+        buf = editor_area.buffer
+        doc = buf.document
+        row, col = doc.cursor_position_row, doc.cursor_position_col
+        width = _editor_width()
+        line = doc.lines[row]
+        starts, _ = _word_wrap_boundaries(line, width)
+        vline = 0
+        for idx, s in enumerate(starts):
+            if col >= s:
+                vline = idx
+        visual_col = col - starts[vline]
+        if vline < len(starts) - 1:
+            # Move down within the same paragraph.
+            next_start = starts[vline + 1]
+            next_end = starts[vline + 2] - 1 if vline + 2 < len(starts) else len(line)
+            new_col = min(next_start + visual_col, next_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row, new_col)
+        elif row < doc.line_count - 1:
+            # Move to first visual line of next paragraph.
+            next_line = doc.lines[row + 1]
+            next_starts, _ = _word_wrap_boundaries(next_line, width)
+            first_end = next_starts[1] - 1 if len(next_starts) > 1 else len(next_line)
+            new_col = min(visual_col, first_end)
+            buf.cursor_position = doc.translate_row_col_to_index(row + 1, new_col)
 
     @kb.add("c-up", filter=is_editor & no_float)
     def _(event):
