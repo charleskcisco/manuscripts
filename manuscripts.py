@@ -1315,6 +1315,29 @@ def _detect_printers():
         return []
 
 
+def _clipboard_copy(text):
+    """Copy text to system clipboard."""
+    for cmd in [["wl-copy"], ["xclip", "-selection", "clipboard"]]:
+        try:
+            subprocess.run(cmd, input=text, text=True, timeout=2)
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    return False
+
+
+def _clipboard_paste():
+    """Get text from system clipboard."""
+    for cmd in [["wl-paste", "--no-newline"], ["xclip", "-selection", "clipboard", "-o"]]:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                return result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+
 def _para_count(text):
     """Count paragraphs in text (excluding YAML frontmatter)."""
     body = re.sub(r"^---\n.*?\n---\n?", "", text, count=1, flags=re.DOTALL)
@@ -2200,6 +2223,31 @@ def create_app(storage):
         input_processors=[WordWrapProcessor()],
     )
     editor_area.buffer.on_text_changed += lambda buf: setattr(state, 'editor_dirty', True)
+
+    # ── Clipboard (Ctrl+C / Ctrl+V) on editor control ────────────
+    _editor_cb_kb = KeyBindings()
+
+    @_editor_cb_kb.add("c-v")
+    def _paste(event):
+        text = _clipboard_paste()
+        if text:
+            event.current_buffer.insert_text(text)
+
+    @_editor_cb_kb.add("c-c")
+    def _copy(event):
+        buf = event.current_buffer
+        if buf.selection_state:
+            start = buf.selection_state.original_cursor_position
+            end = buf.cursor_position
+            if start > end:
+                start, end = end, start
+            selected = buf.text[start:end]
+            if selected:
+                _clipboard_copy(selected)
+                show_notification(state, "Copied.")
+            buf.exit_selection()
+
+    editor_area.control.key_bindings = _editor_cb_kb
 
     def get_status_text():
         if state.notification:
