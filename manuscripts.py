@@ -2020,7 +2020,7 @@ def create_app(storage):
             [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
              ("^R", "Cite"), ("^Z", "Undo"), ("^Y", "Redo")],
             [("^Up", "Top"), ("^Down", "Bottom")],
-            [("F1", "This panel")],
+            [("^G", "This panel")],
         ]
         result = []
         for i, section in enumerate(sections):
@@ -2308,7 +2308,7 @@ def create_app(storage):
                 ("Insert blank footnote (^N)", "Insert footnote", do_footnote),
                 ("Insert frontmatter", "Add YAML frontmatter", do_insert_frontmatter),
                 ("Insert reference (^R)", "Insert a citation", None),
-                ("Keybindings (F1)", "Toggle keybindings panel",
+                ("Keybindings (^G)", "Toggle keybindings panel",
                  lambda: toggle_keybindings()),
                 ("Return to manuscripts (Esc)", "Save and go back", return_to_projects),
                 ("Save (^S)", "Save document", lambda: do_save()),
@@ -2480,7 +2480,7 @@ def create_app(storage):
     def _(event):
         do_footnote()
 
-    @kb.add("f1", filter=is_editor & no_float)
+    @kb.add("c-g", filter=is_editor & no_float)
     def _(event):
         toggle_keybindings()
 
@@ -2527,7 +2527,7 @@ def create_app(storage):
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", None),
-                    ("Keybindings", "F1", toggle_keybindings),
+                    ("Keybindings", "^G", toggle_keybindings),
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", None),
@@ -2591,7 +2591,7 @@ def create_app(storage):
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", cmd_cite),
-                    ("Keybindings", "F1", toggle_keybindings),
+                    ("Keybindings", "^G", toggle_keybindings),
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),
