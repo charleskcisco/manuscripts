@@ -1257,6 +1257,7 @@ class AppState:
         self.auto_save_task = None
         self.export_paths = []
         self.show_word_count = False
+        self.last_find_query = ""
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -2077,6 +2078,98 @@ class CommandPaletteDialog:
         return self.dialog
 
 
+class FindDialog:
+    """In-editor find dialog with live search and next-match cycling."""
+
+    def __init__(self, editor_buf, last_query=""):
+        self.future = asyncio.Future()
+        self.editor_buf = editor_buf
+        self.search_buf = Buffer(multiline=False)
+        if last_query:
+            self.search_buf.set_document(
+                Document(last_query, len(last_query)), bypass_readonly=True,
+            )
+        self.status_text = ""
+
+        search_kb = KeyBindings()
+
+        @search_kb.add("enter")
+        def _next(event):
+            self._find_next()
+
+        @search_kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
+        self.search_control = BufferControl(
+            buffer=self.search_buf, key_bindings=search_kb,
+        )
+        self.search_window = Window(
+            content=self.search_control, height=1, style="class:input",
+        )
+        self.status_control = FormattedTextControl(
+            lambda: [("class:hint", self.status_text)],
+        )
+        self.search_buf.on_text_changed += self._on_changed
+
+        self.dialog = Dialog(
+            title="Find",
+            body=HSplit([
+                Label(text="Search:"),
+                self.search_window,
+                Window(content=self.status_control, height=1),
+            ]),
+            buttons=[Button(text="Close", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=50),
+        )
+
+    def _on_changed(self, buf):
+        self._find_from_current()
+
+    def _find_from_current(self):
+        query = self.search_buf.text
+        if not query:
+            self.status_text = ""
+            get_app().invalidate()
+            return
+        text = self.editor_buf.text
+        lower_text = text.lower()
+        lower_query = query.lower()
+        pos = lower_text.find(lower_query, self.editor_buf.cursor_position)
+        if pos == -1:
+            pos = lower_text.find(lower_query, 0)
+        count = lower_text.count(lower_query)
+        if pos != -1:
+            self.editor_buf.cursor_position = pos
+            self.status_text = f" {count} match{'es' if count != 1 else ''}"
+        else:
+            self.status_text = " No matches"
+        get_app().invalidate()
+
+    def _find_next(self):
+        query = self.search_buf.text
+        if not query:
+            return
+        text = self.editor_buf.text
+        lower_text = text.lower()
+        lower_query = query.lower()
+        start = self.editor_buf.cursor_position + 1
+        pos = lower_text.find(lower_query, start)
+        if pos == -1:
+            pos = lower_text.find(lower_query, 0)
+        if pos != -1:
+            self.editor_buf.cursor_position = pos
+        get_app().invalidate()
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(self.search_buf.text)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  Application
 # ════════════════════════════════════════════════════════════════════════
@@ -2295,8 +2388,9 @@ def create_app(storage):
             [("Esc", "Manuscripts"), ("^O", "Sources"), ("^P", "Commands"),
              ("^Q", "Quit"), ("^S", "Save")],
             [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
-             ("^R", "Cite"), ("^Z", "Undo"), ("^Y", "Redo")],
-            [("^W", "Word/para"), ("^Up", "Top"), ("^Down", "Bottom")],
+             ("^R", "Cite"), ("^Z", "Undo"), ("^⇧Z", "Redo")],
+            [("^F", "Find"), ("^W", "Word/para"), ("^Up", "Top"),
+             ("^Down", "Bottom")],
             [("^G", "This panel")],
         ]
         result = []
@@ -2475,6 +2569,29 @@ def create_app(storage):
         get_app().layout.focus(project_search.window)
         get_app().invalidate()
 
+    def _word_at_cursor(buf):
+        """Return (start, end) of the word at cursor, or None."""
+        text = buf.text
+        pos = buf.cursor_position
+        if not text:
+            return None
+        def is_word(c):
+            return c.isalnum() or c in ("'", "\u2019")
+        at = is_word(text[pos]) if pos < len(text) else False
+        before = is_word(text[pos - 1]) if pos > 0 else False
+        if not at and not before:
+            return None
+        start = pos
+        while start > 0 and is_word(text[start - 1]):
+            start -= 1
+        if at:
+            end = pos
+            while end < len(text) and is_word(text[end]):
+                end += 1
+        else:
+            end = pos
+        return (start, end) if start < end else None
+
     def do_bold():
         buf = editor_area.buffer
         if buf.selection_state:
@@ -2485,6 +2602,18 @@ def create_app(storage):
             selected = buf.text[start:end]
             new_text = buf.text[:start] + f"**{selected}**" + buf.text[end:]
             buf.set_document(Document(new_text, start + len(selected) + 4), bypass_readonly=True)
+            return
+        word = _word_at_cursor(buf)
+        if word:
+            ws, we = word
+            text = buf.text
+            # Toggle: remove bold if already wrapped
+            if ws >= 2 and we + 2 <= len(text) and text[ws-2:ws] == "**" and text[we:we+2] == "**":
+                new_text = text[:ws-2] + text[ws:we] + text[we+2:]
+                buf.set_document(Document(new_text, ws - 2), bypass_readonly=True)
+            else:
+                new_text = text[:ws] + f"**{text[ws:we]}**" + text[we:]
+                buf.set_document(Document(new_text, we + 4), bypass_readonly=True)
         else:
             pos = buf.cursor_position
             new_text = buf.text[:pos] + "****" + buf.text[pos:]
@@ -2500,6 +2629,20 @@ def create_app(storage):
             selected = buf.text[start:end]
             new_text = buf.text[:start] + f"*{selected}*" + buf.text[end:]
             buf.set_document(Document(new_text, start + len(selected) + 2), bypass_readonly=True)
+            return
+        word = _word_at_cursor(buf)
+        if word:
+            ws, we = word
+            text = buf.text
+            # Toggle: remove italic if wrapped in single * (but not **)
+            before_ok = ws >= 1 and text[ws-1] == "*" and (ws < 2 or text[ws-2] != "*")
+            after_ok = we < len(text) and text[we] == "*" and (we + 1 >= len(text) or text[we+1] != "*")
+            if before_ok and after_ok:
+                new_text = text[:ws-1] + text[ws:we] + text[we+1:]
+                buf.set_document(Document(new_text, ws - 1), bypass_readonly=True)
+            else:
+                new_text = text[:ws] + f"*{text[ws:we]}*" + text[we:]
+                buf.set_document(Document(new_text, we + 2), bypass_readonly=True)
         else:
             pos = buf.cursor_position
             new_text = buf.text[:pos] + "**" + buf.text[pos:]
@@ -2809,6 +2952,16 @@ def create_app(storage):
     def _(event):
         toggle_keybindings()
 
+    @kb.add("c-f", filter=is_editor & no_float)
+    def _(event):
+        async def _do():
+            dlg = FindDialog(editor_area.buffer, state.last_find_query)
+            result = await show_dialog_as_float(state, dlg)
+            if result is not None:
+                state.last_find_query = result
+
+        asyncio.ensure_future(_do())
+
     @kb.add("c-r", filter=is_editor & no_float)
     def _(event):
         if not state.current_project:
@@ -2849,6 +3002,7 @@ def create_app(storage):
                 cmds = [
                     ("Bibliography", "Insert bibliography", do_bibliography),
                     ("Export", "Export document", None),
+                    ("Find", "^F", None),
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", None),
@@ -2910,9 +3064,16 @@ def create_app(storage):
                         state.storage.save_project(state.current_project)
                         show_notification(state, f"Imported {len(sources)} source(s).")
 
+                async def cmd_find():
+                    dlg = FindDialog(editor_area.buffer, state.last_find_query)
+                    result = await show_dialog_as_float(state, dlg)
+                    if result is not None:
+                        state.last_find_query = result
+
                 cmds = [
                     ("Bibliography", "Insert bibliography", do_bibliography),
                     ("Export", "Export document", cmd_export),
+                    ("Find", "^F", cmd_find),
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", cmd_cite),
