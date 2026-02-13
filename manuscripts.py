@@ -1995,7 +1995,6 @@ def create_app(storage):
         multiline=True,
         wrap_lines=True,
         scrollbar=False,
-        lexer=PygmentsLexer(MarkdownInlineLexer),
         style="class:editor",
         focus_on_click=True,
     )
@@ -2021,7 +2020,7 @@ def create_app(storage):
             [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
              ("^R", "Cite"), ("^Z", "Undo"), ("^Y", "Redo")],
             [("^Up", "Top"), ("^Down", "Bottom")],
-            [("^H", "This panel")],
+            [("F1", "This panel")],
         ]
         result = []
         for i, section in enumerate(sections):
@@ -2309,7 +2308,7 @@ def create_app(storage):
                 ("Insert blank footnote (^N)", "Insert footnote", do_footnote),
                 ("Insert frontmatter", "Add YAML frontmatter", do_insert_frontmatter),
                 ("Insert reference (^R)", "Insert a citation", None),
-                ("Keybindings (^H)", "Toggle keybindings panel",
+                ("Keybindings (F1)", "Toggle keybindings panel",
                  lambda: toggle_keybindings()),
                 ("Return to manuscripts (Esc)", "Save and go back", return_to_projects),
                 ("Save (^S)", "Save document", lambda: do_save()),
@@ -2343,6 +2342,9 @@ def create_app(storage):
     is_projects = Condition(lambda: state.screen == "projects")
     is_editor = Condition(lambda: state.screen == "editor")
     no_float = Condition(lambda: len(state.root_container.floats) == 0)
+    search_not_focused = Condition(
+        lambda: get_app().layout.current_window != project_search.window)
+    projects_list_focused = is_projects & no_float & search_not_focused
 
     # -- Global --
     @kb.add("escape")
@@ -2368,7 +2370,7 @@ def create_app(storage):
             show_notification(state, "Press Ctrl+Q again to quit.", duration=2.0)
 
     # -- Projects screen --
-    @kb.add("n", filter=is_projects & no_float)
+    @kb.add("n", filter=projects_list_focused)
     def _(event):
         if state.showing_exports:
             return
@@ -2383,7 +2385,7 @@ def create_app(storage):
 
         asyncio.ensure_future(_do())
 
-    @kb.add("r", filter=is_projects & no_float)
+    @kb.add("r", filter=projects_list_focused)
     def _(event):
         if state.showing_exports:
             return
@@ -2407,7 +2409,7 @@ def create_app(storage):
 
         asyncio.ensure_future(_do())
 
-    @kb.add("d", filter=is_projects & no_float)
+    @kb.add("d", filter=projects_list_focused)
     def _(event):
         if state.showing_exports:
             return
@@ -2427,11 +2429,11 @@ def create_app(storage):
 
         asyncio.ensure_future(_do())
 
-    @kb.add("e", filter=is_projects & no_float)
+    @kb.add("e", filter=projects_list_focused)
     def _(event):
         toggle_exports()
 
-    @kb.add("m", filter=is_projects & no_float)
+    @kb.add("m", filter=projects_list_focused)
     def _(event):
         if state.showing_exports:
             return
@@ -2443,22 +2445,23 @@ def create_app(storage):
             state.mass_export_pending = now
             show_notification(state, "Press m again to export all as Markdown.", duration=2.0)
 
-    @kb.add("down", filter=is_projects & no_float)
-    def _(event):
-        focused = event.app.layout.current_window
-        if focused == project_search.window:
-            if state.showing_exports:
-                event.app.layout.focus(export_list.window)
-            else:
-                event.app.layout.focus(project_list.window)
+    search_focused = Condition(
+        lambda: state.screen == "projects"
+        and len(state.root_container.floats) == 0
+        and get_app().layout.current_window == project_search.window)
 
-    @kb.add("enter", filter=is_projects & no_float)
+    @kb.add("down", filter=search_focused)
     def _(event):
-        focused = event.app.layout.current_window
-        if focused == project_search.window:
-            filtered = fuzzy_filter_projects(state.projects, project_search.text)
-            if filtered:
-                open_project(filtered[0].id)
+        if state.showing_exports:
+            event.app.layout.focus(export_list.window)
+        else:
+            event.app.layout.focus(project_list.window)
+
+    @kb.add("enter", filter=search_focused)
+    def _(event):
+        filtered = fuzzy_filter_projects(state.projects, project_search.text)
+        if filtered:
+            open_project(filtered[0].id)
 
     # -- Editor screen --
     @kb.add("c-s", filter=is_editor & no_float)
@@ -2477,7 +2480,7 @@ def create_app(storage):
     def _(event):
         do_footnote()
 
-    @kb.add("c-h", filter=is_editor & no_float)
+    @kb.add("f1", filter=is_editor & no_float)
     def _(event):
         toggle_keybindings()
 
@@ -2524,7 +2527,7 @@ def create_app(storage):
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", None),
-                    ("Keybindings", "^H", toggle_keybindings),
+                    ("Keybindings", "F1", toggle_keybindings),
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", None),
@@ -2588,7 +2591,7 @@ def create_app(storage):
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", cmd_cite),
-                    ("Keybindings", "^H", toggle_keybindings),
+                    ("Keybindings", "F1", toggle_keybindings),
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),
