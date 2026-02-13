@@ -41,12 +41,11 @@ from prompt_toolkit.layout.containers import (
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension as D
 from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.layout.processors import Processor, Transformation
+from prompt_toolkit.lexers import Lexer as PtLexer
 from prompt_toolkit.styles import Style as PtStyle
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Button, Dialog, Label, TextArea
-
-from pygments.lexer import RegexLexer, bygroups
-from pygments.token import Token
 
 # ════════════════════════════════════════════════════════════════════════
 #  Data Models
@@ -1008,28 +1007,152 @@ def parse_bibtex(text: str) -> list[Source]:
 
 
 # ════════════════════════════════════════════════════════════════════════
-#  Markdown Lexer
+#  Markdown Lexer (prompt_toolkit native — per-line regex, no Pygments)
 # ════════════════════════════════════════════════════════════════════════
 
 
-class MarkdownInlineLexer(RegexLexer):
-    """Minimal Markdown lexer for inline highlighting."""
+class MarkdownLexer(PtLexer):
+    """Fast per-line markdown highlighter for the editor."""
 
-    name = "MarkdownInline"
-    flags = re.MULTILINE
-    tokens = {
-        "root": [
-            (r"^(#{1,6})(\s+)(.+)$",
-             bygroups(Token.Comment, Token.Text, Token.Generic.Heading)),
-            (r"\*\*[^*]+\*\*", Token.Generic.Strong),
-            (r"(?<!\*)\*(?!\*)[^*]+?(?<!\*)\*(?!\*)", Token.Generic.Emph),
-            (r"`[^`]+`", Token.Literal.String),
-            (r"\^\[[^\]]*\]", Token.Comment.Special),
-            (r"\[[^\]]+\]\([^)]+\)", Token.Name.Tag),
-            (r"[^\n]", Token.Text),
-            (r"\n", Token.Text),
-        ],
-    }
+    _HEADING_RE = re.compile(r'^(#{1,6}\s+)(.+)$')
+    _PATTERNS = [
+        (re.compile(r'\*\*[^*]+\*\*'), 'class:md.bold'),
+        (re.compile(r'(?<!\*)\*(?!\*)[^*]+?(?<!\*)\*(?!\*)'), 'class:md.italic'),
+        (re.compile(r'`[^`]+`'), 'class:md.code'),
+        (re.compile(r'\^\[[^\]]*\]'), 'class:md.footnote'),
+        (re.compile(r'\[[^\]]+\]\([^)]+\)'), 'class:md.link'),
+    ]
+
+    def lex_document(self, document):
+        lines = document.lines
+
+        def get_line(lineno):
+            try:
+                text = lines[lineno]
+            except IndexError:
+                return []
+            if not text:
+                return [('', '')]
+            hm = MarkdownLexer._HEADING_RE.match(text)
+            if hm:
+                return [
+                    ('class:md.heading-marker', hm.group(1)),
+                    ('class:md.heading', hm.group(2)),
+                ]
+            matches = []
+            for pattern, style in MarkdownLexer._PATTERNS:
+                for m in pattern.finditer(text):
+                    matches.append((m.start(), m.end(), style))
+            if not matches:
+                return [('', text)]
+            matches.sort(key=lambda x: x[0])
+            fragments = []
+            pos = 0
+            for start, end, style in matches:
+                if start < pos:
+                    continue
+                if start > pos:
+                    fragments.append(('', text[pos:start]))
+                fragments.append((style, text[start:end]))
+                pos = end
+            if pos < len(text):
+                fragments.append(('', text[pos:]))
+            return fragments
+
+        return get_line
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Word-Wrap Processor
+# ════════════════════════════════════════════════════════════════════════
+
+
+class WordWrapProcessor(Processor):
+    """Insert padding at word boundaries so character-level wrap becomes word wrap."""
+
+    def apply_transformation(self, ti):
+        width = ti.width
+        if not width or width <= 0:
+            return Transformation(ti.fragments)
+
+        # Get the plain text to find wrap points.
+        text = ''.join(t for _, t, *__ in ti.fragments)
+        if not text or len(text) <= width:
+            return Transformation(ti.fragments)
+
+        # Walk through text to find where padding is needed.
+        padding_inserts = []  # (source_index_of_space, pad_count)
+        x = 0
+        last_space_i = None
+        last_space_x = 0
+
+        for i, c in enumerate(text):
+            cw = get_cwidth(c)
+            if x + cw > width:
+                if last_space_i is not None:
+                    pad = width - last_space_x - 1
+                    if pad > 0:
+                        padding_inserts.append((last_space_i, pad))
+                    x = x - last_space_x - 1
+                    last_space_i = None
+                    last_space_x = 0
+                else:
+                    x = x % width if width else 0
+            if c == ' ':
+                last_space_i = i
+                last_space_x = x
+            x += cw
+
+        if not padding_inserts:
+            return Transformation(ti.fragments)
+
+        # Insert padding spaces into the styled fragments.
+        pad_dict = dict(padding_inserts)
+        new_fragments = []
+        source_pos = 0
+        for style, frag_text, *rest in ti.fragments:
+            start = 0
+            for j, c in enumerate(frag_text):
+                if source_pos + j in pad_dict:
+                    new_fragments.append((style, frag_text[start:j + 1]))
+                    new_fragments.append(('', ' ' * pad_dict[source_pos + j]))
+                    start = j + 1
+            if start < len(frag_text):
+                new_fragments.append((style, frag_text[start:]))
+            source_pos += len(frag_text)
+
+        # Build cursor-position mappings.
+        boundaries = []
+        cum = 0
+        for pos, pad in padding_inserts:
+            cum += pad
+            boundaries.append((pos + 1, cum, pad))
+
+        prev_s2d = ti.source_to_display
+
+        def source_to_display(i):
+            intermediate = prev_s2d(i)
+            offset = 0
+            for next_start, cum_pad, _ in boundaries:
+                if intermediate >= next_start:
+                    offset = cum_pad
+                else:
+                    break
+            return intermediate + offset
+
+        def display_to_source(i):
+            prev_cum = 0
+            for next_start, cum_pad, pad in boundaries:
+                display_boundary = next_start + prev_cum
+                if i >= display_boundary and i < display_boundary + pad:
+                    return next_start
+                elif i >= display_boundary + pad:
+                    prev_cum = cum_pad
+                else:
+                    break
+            return max(0, i - prev_cum)
+
+        return Transformation(new_fragments, source_to_display, display_to_source)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1997,6 +2120,8 @@ def create_app(storage):
         scrollbar=False,
         style="class:editor",
         focus_on_click=True,
+        lexer=MarkdownLexer(),
+        input_processors=[WordWrapProcessor()],
     )
     editor_area.buffer.on_text_changed += lambda buf: setattr(state, 'editor_dirty', True)
 
@@ -2642,16 +2767,14 @@ def create_app(storage):
         "dialog shadow": "bg:#111111",
         "button": "#e0e0e0 bg:#555555",
         "button.focused": "#e0e0e0 bg:#777777",
-        # Pygments token styles
-        "pygments.comment": "#666666",
-        "pygments.text": "",
-        "pygments.generic.heading": "bold #e0af68",
-        "pygments.generic.strong": "bold",
-        "pygments.generic.emph": "italic",
-        "pygments.literal.string": "#a0a0a0",
-        "pygments.comment.special": "#7aa2f7",
-        "pygments.name.tag": "#7aa2f7",
-        "pygments.name.attribute": "#666666",
+        # Markdown inline styles
+        "md.heading-marker": "#666666",
+        "md.heading": "bold #e0af68",
+        "md.bold": "bold",
+        "md.italic": "italic",
+        "md.code": "#a0a0a0",
+        "md.footnote": "#7aa2f7",
+        "md.link": "#7aa2f7",
     })
 
     # ── Build Application ────────────────────────────────────────────
