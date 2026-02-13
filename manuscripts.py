@@ -1417,8 +1417,6 @@ class MarkdownTextArea(TextArea):
 
     def _build_highlight_map(self) -> None:
         self._line_cache.clear()
-        self._highlights.clear()
-        self._apply_heading_highlights()
         if self._ts_timer is not None:
             self._ts_timer.stop()
         self._ts_timer = self.set_timer(0.3, self._deferred_highlight)
@@ -1436,6 +1434,7 @@ class MarkdownTextArea(TextArea):
         self._ts_timer = None
         super()._build_highlight_map()
         self._apply_heading_highlights()
+        self.refresh()
 
 
 class KeybindingsPanel(Static):
@@ -1483,6 +1482,10 @@ class KeybindingsPanel(Static):
                 ("^Y", "Redo"),
             ]),
             ("", [
+                ("^Up", "Top of document"),
+                ("^Down", "Bottom of document"),
+            ]),
+            ("", [
                 ("^H", "This panel"),
             ]),
         ]
@@ -1518,6 +1521,8 @@ class EditorScreen(Screen):
         Binding("ctrl+v", "noop", "Paste", system=True),
         Binding("ctrl+x", "noop", "Cut", system=True),
         Binding("ctrl+z", "noop", "Undo", system=True),
+        Binding("ctrl+up", "jump_top", "Jump to top", system=True),
+        Binding("ctrl+down", "jump_bottom", "Jump to bottom", system=True),
         Binding("ctrl+h", "toggle_help", "Keybindings", system=True),
         Binding("shift+arrows", "noop", "Select text", system=True),
     ]
@@ -1623,6 +1628,16 @@ class EditorScreen(Screen):
     def action_noop(self) -> None:
         """No-op action for display-only bindings."""
         pass
+
+    def action_jump_top(self) -> None:
+        ta = self.query_one("#editor", TextArea)
+        ta.move_cursor((0, 0))
+
+    def action_jump_bottom(self) -> None:
+        ta = self.query_one("#editor", TextArea)
+        last_line = ta.document.line_count - 1
+        last_col = len(ta.document.get_line(last_line))
+        ta.move_cursor((last_line, last_col))
 
     def action_toggle_help(self) -> None:
         """Toggle the keybindings panel."""
