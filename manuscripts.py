@@ -902,7 +902,7 @@ def fuzzy_filter_projects(projects: list[Project], query: str) -> list[Project]:
             scored.append((100.0, p))
         else:
             ratio = SequenceMatcher(None, q, hay).ratio() * 100
-            if ratio > 55:
+            if ratio > 70:
                 scored.append((ratio, p))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [p for _, p in scored]
@@ -1256,6 +1256,7 @@ class AppState:
         self.root_container = None
         self.auto_save_task = None
         self.export_paths = []
+        self.show_word_count = False
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1282,7 +1283,7 @@ def show_notification(state, message, duration=3.0):
 async def show_dialog_as_float(state, dialog):
     """Show a modal dialog as a float and await its result."""
     float_ = Float(content=dialog, transparent=False)
-    state.root_container.floats.insert(0, float_)
+    state.root_container.floats.append(float_)
     app = get_app()
     focused_before = app.layout.current_window
     app.layout.focus(dialog)
@@ -1320,6 +1321,12 @@ def _para_count(text):
     return sum(1 for p in re.split(r"\n\s*\n", body) if p.strip())
 
 
+def _word_count(text):
+    """Count words in text (excluding YAML frontmatter)."""
+    body = re.sub(r"^---\n.*?\n---\n?", "", text, count=1, flags=re.DOTALL)
+    return len(body.split())
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  Dialogs
 # ════════════════════════════════════════════════════════════════════════
@@ -1341,7 +1348,7 @@ class InputDialog:
 
         self.text_area.buffer.accept_handler = accept
         ok_btn = Button(text=ok_text, handler=accept)
-        cancel_btn = Button(text="Cancel", handler=self.cancel)
+        cancel_btn = Button(text="(c) Cancel", handler=self.cancel)
         self.dialog = Dialog(
             title=title,
             body=HSplit([Label(text=label_text), self.text_area]),
@@ -1375,7 +1382,7 @@ class ConfirmDialog:
                 self.future.set_result(False)
 
         self._control = FormattedTextControl(
-            [("", f"\n  {question}\n\n  Press (y) Yes or (n) No\n")],
+            [("", f"\n  {question}\n")],
             focusable=True,
             key_bindings=kb,
         )
@@ -1390,10 +1397,10 @@ class ConfirmDialog:
 
         self.dialog = Dialog(
             title="Confirm",
-            body=Window(content=self._control, height=5),
+            body=Window(content=self._control, height=3),
             buttons=[
-                Button(text="Yes", handler=yes_handler),
-                Button(text="No", handler=no_handler),
+                Button(text="(y) Yes", handler=yes_handler),
+                Button(text="(n) No", handler=no_handler),
             ],
             modal=True,
             width=D(preferred=50),
@@ -1418,10 +1425,14 @@ class ExportFormatDialog:
             ("docx", "Word (.docx)"),
             ("md", "Markdown (.md)"),
         ])
+        @self.list._kb.add("c")
+        def _cancel(event):
+            self.cancel()
+
         self.dialog = Dialog(
             title="Export as",
             body=HSplit([self.list], padding=0),
-            buttons=[Button(text="Cancel", handler=self.cancel)],
+            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=40, max=50),
         )
@@ -1446,10 +1457,14 @@ class PrinterPickerDialog:
         self.file_path = file_path
         self.list = SelectableList(on_select=self._select)
         self.list.set_items([(p, p) for p in printers])
+        @self.list._kb.add("c")
+        def _cancel(event):
+            self.cancel()
+
         self.dialog = Dialog(
             title="Print to",
             body=HSplit([self.list]),
-            buttons=[Button(text="Cancel", handler=self.cancel)],
+            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=50, max=60),
         )
@@ -1507,7 +1522,7 @@ class CitePickerDialog:
         self.dialog = Dialog(
             title="Insert Citation",
             body=HSplit([self.search_window, self.results], padding=0),
-            buttons=[Button(text="Cancel", handler=self.cancel)],
+            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=80, max=100),
         )
@@ -1593,7 +1608,7 @@ class SourceFormDialog:
             ]),
             buttons=[
                 Button(text="Save", handler=do_save),
-                Button(text="Cancel", handler=self.cancel),
+                Button(text="(c) Cancel", handler=self.cancel),
             ],
             modal=True,
             width=D(preferred=80, max=100),
@@ -1699,7 +1714,7 @@ class SourcesDialog:
                     state.storage.save_project(self.project)
                     self._refresh_list()
                     show_notification(state, f"Added: {source.author}")
-                event.app.layout.focus(self.source_list.window)
+                get_app().layout.focus(self.source_list.window)
             asyncio.ensure_future(_do())
 
         @action_kb.add("i")
@@ -1729,7 +1744,7 @@ class SourcesDialog:
                     if skipped:
                         msg += f" {skipped} duplicate(s) skipped."
                     show_notification(state, msg)
-                event.app.layout.focus(self.source_list.window)
+                get_app().layout.focus(self.source_list.window)
             asyncio.ensure_future(_do())
 
         @action_kb.add("d")
@@ -1750,15 +1765,19 @@ class SourcesDialog:
                 self._delete_pending = now
                 show_notification(self.state, "Press d again to confirm delete.", duration=2.0)
 
+        def close():
+            if not self.future.done():
+                self.future.set_result(None)
+
+        @action_kb.add("c")
+        def _close(event):
+            close()
+
         self.source_list.control.key_bindings = KeyBindings()
         for b in self.source_list._kb.bindings:
             self.source_list.control.key_bindings.bindings.append(b)
         for b in action_kb.bindings:
             self.source_list.control.key_bindings.bindings.append(b)
-
-        def close():
-            if not self.future.done():
-                self.future.set_result(None)
 
         self.dialog = Dialog(
             title=f"Sources: {project.name}",
@@ -1766,7 +1785,7 @@ class SourcesDialog:
             buttons=[
                 Button(text="(a) Add", handler=lambda: _add(None)),
                 Button(text="(i) Import", handler=lambda: _import(None)),
-                Button(text="Close", handler=close),
+                Button(text="(c) Close", handler=close),
             ],
             modal=True,
             width=D(preferred=80, max=100),
@@ -1824,7 +1843,7 @@ class BibImportDialog:
             ]),
             buttons=[
                 Button(text="Import", handler=do_import),
-                Button(text="Cancel", handler=self.cancel),
+                Button(text="(c) Cancel", handler=self.cancel),
             ],
             modal=True,
         )
@@ -1963,7 +1982,7 @@ class CommandPaletteDialog:
         self.dialog = Dialog(
             title="Command Palette",
             body=HSplit([self.search_window, self.results], padding=0),
-            buttons=[Button(text="Cancel", handler=self.cancel)],
+            buttons=[Button(text="(c) Cancel", handler=self.cancel)],
             modal=True,
             width=D(preferred=60, max=80),
         )
@@ -2027,7 +2046,7 @@ def create_app(storage):
     project_list = SelectableList()
     export_list = SelectableList()
     hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports")])
+        lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports  (/) Search")])
     hints_window = Window(content=hints_control, height=1)
 
     def refresh_projects(query=""):
@@ -2121,10 +2140,15 @@ def create_app(storage):
         hints_window,
     ])
 
+    exports_hints_control = FormattedTextControl(
+        lambda: [("class:hint", " (m) Manuscripts  (d) Delete")])
+    exports_hints_window = Window(content=exports_hints_control, height=1)
+
     exports_view = HSplit([
         Window(FormattedTextControl([("class:title", " Exports")]),
                height=1, dont_extend_height=True),
         export_list,
+        exports_hints_window,
     ])
 
     def get_projects_screen():
@@ -2152,9 +2176,14 @@ def create_app(storage):
         if state.notification:
             return [("class:status", f" {state.notification}")]
         if state.current_project:
-            paras = _para_count(editor_area.text)
-            return [("class:status",
-                     f" {state.current_project.name}  {paras} \u00b6")]
+            if state.show_word_count:
+                words = _word_count(editor_area.text)
+                return [("class:status",
+                         f" {state.current_project.name}  {words} words")]
+            else:
+                paras = _para_count(editor_area.text)
+                return [("class:status",
+                         f" {state.current_project.name}  {paras} \u00b6")]
         return [("class:status", "")]
 
     status_bar = Window(
@@ -2167,7 +2196,7 @@ def create_app(storage):
              ("^Q", "Quit"), ("^S", "Save")],
             [("^B", "Bold"), ("^I", "Italic"), ("^N", "Footnote"),
              ("^R", "Cite"), ("^Z", "Undo"), ("^Y", "Redo")],
-            [("^Up", "Top"), ("^Down", "Bottom")],
+            [("^W", "Word/para"), ("^Up", "Top"), ("^Down", "Bottom")],
             [("^G", "This panel")],
         ]
         result = []
@@ -2498,7 +2527,7 @@ def create_app(storage):
     @kb.add("escape", eager=True)
     def _(event):
         if state.root_container.floats:
-            dialog = state.root_container.floats[0].content
+            dialog = state.root_container.floats[-1].content
             if hasattr(dialog, 'cancel'):
                 dialog.cancel()
             elif hasattr(dialog, 'future') and not dialog.future.done():
@@ -2514,8 +2543,10 @@ def create_app(storage):
                                   "Press Esc again to return to manuscripts.",
                                   duration=2.0)
         elif state.screen == "projects":
-            # Return focus to search field from project list
-            event.app.layout.focus(project_search.window)
+            if state.showing_exports:
+                toggle_exports()
+            else:
+                event.app.layout.focus(project_search.window)
 
     @kb.add("c-q")
     def _(event):
@@ -2556,7 +2587,7 @@ def create_app(storage):
 
         async def _do():
             dlg = InputDialog(title="Rename", label_text="New name:",
-                              initial=project.name, ok_text="Rename")
+                              initial="", ok_text="Rename")
             new_name = await show_dialog_as_float(state, dlg)
             if new_name:
                 p = state.storage.load_project(project.id)
@@ -2571,6 +2602,23 @@ def create_app(storage):
     @kb.add("d", filter=projects_list_focused)
     def _(event):
         if state.showing_exports:
+            idx = export_list.selected_index
+            if idx >= len(state.export_paths):
+                return
+            path = state.export_paths[idx]
+
+            async def _do():
+                dlg = ConfirmDialog(f"Delete '{path.name}'?")
+                ok = await show_dialog_as_float(state, dlg)
+                if ok:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                    refresh_exports()
+                    show_notification(state, "Export deleted.")
+
+            asyncio.ensure_future(_do())
             return
         filtered = fuzzy_filter_projects(state.projects, project_search.text)
         idx = project_list.selected_index
@@ -2595,6 +2643,7 @@ def create_app(storage):
     @kb.add("m", filter=projects_list_focused)
     def _(event):
         if state.showing_exports:
+            toggle_exports()
             return
         now = time.monotonic()
         if now - state.mass_export_pending < 2.0:
@@ -2650,6 +2699,11 @@ def create_app(storage):
     @kb.add("c-n", filter=is_editor & no_float)
     def _(event):
         do_footnote()
+
+    @kb.add("c-w", filter=is_editor & no_float)
+    def _(event):
+        state.show_word_count = not state.show_word_count
+        get_app().invalidate()
 
     @kb.add("c-g", filter=is_editor & no_float)
     def _(event):
