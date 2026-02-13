@@ -2182,7 +2182,7 @@ class FindReplacePanel:
     def _scroll_to_cursor(self):
         if self.editor_area is not None:
             row = self.editor_buf.document.cursor_position_row
-            self.editor_area.window.vertical_scroll = max(0, row - 3)
+            self.editor_area.window.vertical_scroll = max(0, row)
 
     def _rebuild_matches(self):
         query = self.search_buf.text
