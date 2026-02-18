@@ -2464,10 +2464,10 @@ def create_app(storage):
     projects_view = HSplit([
         VSplit([
             Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
-                   height=1, dont_extend_height=True, width=14),
-            Window(content=hints_control, height=1),
+                   height=1, dont_extend_height=True),
             Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
+        Window(content=hints_control, height=1),
         project_list,
         project_search,
     ])
