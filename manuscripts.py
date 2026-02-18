@@ -2354,7 +2354,7 @@ def create_app(storage):
     project_list = SelectableList()
     export_list = SelectableList()
     hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (n) New  (r) Rename  (d) Delete  (e) Exports  (p) Pin  (/) Search")])
+        lambda: [("class:hint", " (n) new  (r) rename  (d) delete  (e) exports  (p) pin  (/) search")])
     def _get_shutdown_hint():
         now = time.monotonic()
         if now - state.quit_pending < 2.0:
@@ -2364,10 +2364,6 @@ def create_app(storage):
         return [("class:hint", " (^q) quit  (^s) shut down ")]
 
     shutdown_hint_control = FormattedTextControl(_get_shutdown_hint)
-    hints_window = VSplit([
-        Window(content=hints_control, height=1),
-        Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
-    ])
 
     def refresh_projects(query=""):
         state.projects = state.storage.list_projects()
@@ -2466,15 +2462,18 @@ def create_app(storage):
     export_list.on_select = open_export
 
     projects_view = HSplit([
-        Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
-               height=1, dont_extend_height=True),
-        project_search,
+        VSplit([
+            Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
+                   height=1, dont_extend_height=True, width=14),
+            Window(content=hints_control, height=1),
+            Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
+        ]),
         project_list,
-        hints_window,
+        project_search,
     ])
 
     exports_hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (m) Manuscripts  (d) Delete")])
+        lambda: [("class:hint", " (m) manuscripts  (d) delete")])
     exports_hints_window = Window(content=exports_hints_control, height=1)
 
     exports_view = HSplit([
@@ -2774,7 +2773,7 @@ def create_app(storage):
         state.current_project = None
         state.showing_exports = False
         refresh_projects()
-        get_app().layout.focus(project_search.window)
+        get_app().layout.focus(project_list.window)
         get_app().invalidate()
 
     def _word_at_cursor(buf):
@@ -3005,7 +3004,7 @@ def create_app(storage):
             if state.showing_exports:
                 toggle_exports()
             else:
-                event.app.layout.focus(project_search.window)
+                event.app.layout.focus(project_list.window)
 
     @kb.add("c-q")
     def _(event):
@@ -3491,7 +3490,7 @@ def create_app(storage):
 
     # ── Build Application ────────────────────────────────────────────
 
-    layout = Layout(root, focused_element=project_search.window)
+    layout = Layout(root, focused_element=project_list.window)
 
     app = Application(
         layout=layout,
