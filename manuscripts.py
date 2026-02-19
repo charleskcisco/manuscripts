@@ -2354,14 +2354,14 @@ def create_app(storage):
     project_list = SelectableList()
     export_list = SelectableList()
     hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (n) new  (r) rename  (d) delete  (e) exports  (p) pin  (/) search")])
+        lambda: [("class:hint", " (n) new  (r) rename  (d) delete  (c) copy  (e) exports  (p) pin  (/) search")])
     def _get_shutdown_hint():
         now = time.monotonic()
         if now - state.quit_pending < 2.0:
             return [("class:accent bold", " (^q) press again to quit ")]
         if state.shutdown_pending and now - state.shutdown_pending < 2.0:
             return [("class:accent bold", " (^s) press again to shut down ")]
-        return [("class:hint", " (^q) quit  (^s) shut down ")]
+        return [("class:hint", " (^s) shut down ")]
 
     shutdown_hint_control = FormattedTextControl(_get_shutdown_hint)
 
@@ -2585,7 +2585,7 @@ def create_app(storage):
     def get_keybindings_text():
         sections = [
             [("esc", "Manuscripts"), ("^o", "Sources"),
-             ("^p", "Commands"), ("^q", "Quit"), ("^s", "Save")],
+             ("^p", "Commands"), ("^s", "Save")],
             [("^b", "Bold"), ("^i", "Italic"), ("^n", "Footnote"),
              ("^r", "Cite"), ("^f", "Find/Replace")],
             [("^z", "Undo"), ("^y", "Redo"),
@@ -2947,7 +2947,6 @@ def create_app(storage):
             return [
                 ("Exports (e)", "Toggle exports view", lambda: toggle_exports()),
                 ("New manuscript (n)", "Create a new manuscript", None),
-                ("Quit (q)", "Quit the application", None),
             ]
 
     def toggle_keybindings():
@@ -3094,6 +3093,25 @@ def create_app(storage):
                 show_notification(state, "Manuscript deleted.")
 
         asyncio.ensure_future(_do())
+
+    @kb.add("c", filter=projects_list_focused)
+    def _(event):
+        if state.showing_exports:
+            return
+        filtered = fuzzy_filter_projects(state.projects, project_search.text)
+        idx = project_list.selected_index
+        if idx >= len(filtered):
+            return
+        source = filtered[idx]
+        loaded = state.storage.load_project(source.id)
+        if not loaded:
+            return
+        copy = state.storage.create_project(f"{loaded.name} (copy)")
+        copy.content = loaded.content
+        copy.sources = list(loaded.sources)
+        state.storage.save_project(copy)
+        refresh_projects(project_search.text)
+        show_notification(state, f"Copied '{loaded.name}'.")
 
     @kb.add("e", filter=projects_list_focused)
     def _(event):
@@ -3296,7 +3314,6 @@ def create_app(storage):
                 cmds = [
                     ("Exports", "Toggle exports", toggle_exports),
                     ("New manuscript", "Create new", None),
-                    ("Quit", "Exit app", None),
                 ]
             dlg = CommandPaletteDialog(cmds)
             action = await show_dialog_as_float(state, dlg)
@@ -3374,7 +3391,6 @@ def create_app(storage):
                 cmds = [
                     ("Exports", "Toggle exports", toggle_exports),
                     ("New manuscript", "Create new", None),
-                    ("Quit", "Exit app", None),
                 ]
             dlg = CommandPaletteDialog(cmds)
             action = await show_dialog_as_float(state, dlg)
