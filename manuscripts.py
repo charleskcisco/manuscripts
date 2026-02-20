@@ -2355,14 +2355,11 @@ def create_app(storage):
     export_list = SelectableList()
     def _get_hints():
         sep = ("class:hint.sep", "  ·  ")
-        parts = [
+        return [
             ("class:hint", " (/) search"),
             sep,
             ("class:hint", "(c) copy  (d) delete  (n) new  (p) pin  (r) rename"),
-            sep,
         ]
-        parts += _get_shutdown_hint()
-        return parts
     hints_control = FormattedTextControl(_get_hints)
     def _get_shutdown_hint():
         now = time.monotonic()
@@ -2473,7 +2470,6 @@ def create_app(storage):
         VSplit([
             Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
                    height=1, dont_extend_height=True),
-            Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
         Window(height=1, char="─", style="class:hint"),
         project_list,
@@ -2614,8 +2610,7 @@ def create_app(storage):
              ("^r", "Cite"), ("^f", "Find/Replace")],
             [("^z", "Undo"), ("^y", "Redo"),
              ("^up", "Top"), ("^dn", "Bottom")],
-            [("^w", "Word/para"), ("^g", "This panel"),
-             ("^s", "Shutdown*")],
+            [("^w", "Word/para"), ("^g", "This panel")],
         ]
         result = []
         for i, section in enumerate(sections):
