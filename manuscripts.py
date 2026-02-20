@@ -2354,11 +2354,11 @@ def create_app(storage):
     project_list = SelectableList()
     export_list = SelectableList()
     def _get_hints():
-        sep = ("class:hint.sep", "  ·  ")
+        sep = ("class:hint.sep", " · ")
         return [
             ("class:hint", " (/) search"),
             sep,
-            ("class:hint", "(c) copy  (d) delete  (n) new  (p) pin  (r) rename"),
+            ("class:hint", "(c) copy (d) delete (e) exports (n) new (p) pin (r) rename"),
         ]
     hints_control = FormattedTextControl(_get_hints)
     def _get_shutdown_hint():
@@ -2470,6 +2470,7 @@ def create_app(storage):
         VSplit([
             Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
                    height=1, dont_extend_height=True),
+            Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
         Window(height=1, char="─", style="class:hint"),
         project_list,
@@ -2948,10 +2949,10 @@ def create_app(storage):
     def get_commands():
         if state.screen == "editor":
             return [
-                ("Insert bibliography", "Insert bibliography", do_bibliography),
                 ("Export", "Export document", lambda: asyncio.ensure_future(
                     show_dialog_as_float(state, ExportFormatDialog()).then(
                         lambda fmt: run_export(fmt) if fmt else None))),
+                ("Insert bibliography", "Insert bibliography", do_bibliography),
                 ("Insert blank footnote (^N)", "Insert footnote", do_footnote),
                 ("Insert frontmatter", "Add YAML frontmatter", do_insert_frontmatter),
                 ("Insert reference (^R)", "Insert a citation", None),
@@ -3316,9 +3317,9 @@ def create_app(storage):
             cmds = []
             if state.screen == "editor":
                 cmds = [
-                    ("Insert bibliography", "Insert bibliography", do_bibliography),
                     ("Export", "Export document", None),
                     ("Find", "^F", None),
+                    ("Insert bibliography", "Insert bibliography", do_bibliography),
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", None),
@@ -3392,9 +3393,9 @@ def create_app(storage):
                         pass
 
                 cmds = [
-                    ("Insert bibliography", "Insert bibliography", do_bibliography),
                     ("Export", "Export document", cmd_export),
                     ("Find", "^F", cmd_find),
+                    ("Insert bibliography", "Insert bibliography", do_bibliography),
                     ("Insert blank footnote", "^N", do_footnote),
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", cmd_cite),
