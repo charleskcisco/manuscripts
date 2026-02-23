@@ -1192,6 +1192,47 @@ class WordWrapProcessor(Processor):
         return Transformation(new_fragments, source_to_display, display_to_source)
 
 
+class SpellHighlightProcessor(Processor):
+    """Highlights the current misspelled word in the editor."""
+
+    def __init__(self, state):
+        self._state = state
+
+    def apply_transformation(self, ti):
+        if not (self._state.show_spell_panel and self._state.spell_panel
+                and self._state.spell_panel.occurrences):
+            return Transformation(ti.fragments)
+        panel = self._state.spell_panel
+        word, abs_pos = panel.occurrences[panel.current_idx]
+        abs_end = abs_pos + len(word)
+        doc = ti.document
+        line_start = doc.translate_row_col_to_index(ti.lineno, 0)
+        line_text = ''.join(t for _, t, *__ in ti.fragments)
+        line_end = line_start + len(line_text)
+        if abs_end <= line_start or abs_pos >= line_end:
+            return Transformation(ti.fragments)
+        src_start = max(0, abs_pos - line_start)
+        src_end = min(len(line_text), abs_end - line_start)
+        disp_start = ti.source_to_display(src_start)
+        disp_end = ti.source_to_display(src_end)
+        new_frags = []
+        pos = 0
+        for style, text, *rest in ti.fragments:
+            frag_end = pos + len(text)
+            if frag_end <= disp_start or pos >= disp_end:
+                new_frags.append((style, text) + tuple(rest))
+            else:
+                before = max(pos, disp_start) - pos
+                after = min(frag_end, disp_end) - pos
+                if before > 0:
+                    new_frags.append((style, text[:before]) + tuple(rest))
+                new_frags.append(("class:spell-error", text[before:after]) + tuple(rest))
+                if after < len(text):
+                    new_frags.append((style, text[after:]) + tuple(rest))
+            pos = frag_end
+        return Transformation(new_frags)
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  SelectableList Widget
 # ════════════════════════════════════════════════════════════════════════
@@ -2636,7 +2677,7 @@ def create_app(storage):
         style="class:editor",
         focus_on_click=True,
         lexer=MarkdownLexer(),
-        input_processors=[WordWrapProcessor()],
+        input_processors=[WordWrapProcessor(), SpellHighlightProcessor(state)],
     )
     editor_area.buffer.on_text_changed += lambda buf: setattr(state, 'editor_dirty', True)
 
@@ -3853,6 +3894,7 @@ def create_app(storage):
         "accent": "#e0af68",
         "input": "bg:#333333 #e0e0e0",
         "editor": "",
+        "spell-error": "bold #ff9999",
         "select-list": "",
         "select-list.selected": "bg:#444444",
         "select-list.empty": "#777777",
