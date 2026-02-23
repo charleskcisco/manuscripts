@@ -2330,6 +2330,10 @@ class SpellCheckPanel:
 
     def _close(self):
         self.state.show_spell_panel = False
+        try:
+            get_app().layout.focus(self.editor_area)
+        except ValueError:
+            pass
         get_app().invalidate()
 
     def is_focused(self):
