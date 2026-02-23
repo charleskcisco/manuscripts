@@ -1320,6 +1320,7 @@ async def show_dialog_as_float(state, dialog):
     app = get_app()
     focused_before = app.layout.current_window
     app.layout.focus(dialog)
+    app.invalidate()
     result = await dialog.future
     if float_ in state.root_container.floats:
         state.root_container.floats.remove(float_)
@@ -2127,25 +2128,30 @@ class CommandPaletteDialog:
 class SpellCheckDialog:
     def __init__(self, misspelled):
         self.future = asyncio.Future()
-        if not misspelled:
+        words = sorted(set(misspelled))
+        if not words:
             body = Label("  No misspellings found.")
         else:
-            lines = "\n".join(f"  {w}" for w in sorted(set(misspelled)))
-            body = TextArea(text=lines, read_only=True, scrollbar=True,
-                            style="class:dialog.body")
+            self._list = SelectableList(on_select=self._on_select)
+            self._list.set_items([(w, w) for w in words])
+            body = self._list
 
         def _close():
             if not self.future.done():
-                self.future.set_result(True)
+                self.future.set_result(None)
 
         ok_btn = Button("Close", handler=_close)
         self.container = Dialog(
-            title="Spell Check",
+            title="Spell Check — Enter to go to word",
             body=body,
             buttons=[ok_btn],
             modal=True,
             width=D(preferred=40, min=40),
         )
+
+    def _on_select(self, word):
+        if not self.future.done():
+            self.future.set_result(word)
 
     def __pt_container__(self):
         return self.container
@@ -3440,7 +3446,15 @@ def create_app(storage):
                         show_notification(state, "aspell not found — install it to use spell check.")
                         return
                     dlg = SpellCheckDialog(words)
-                    await show_dialog_as_float(state, dlg)
+                    word = await show_dialog_as_float(state, dlg)
+                    if word:
+                        import re
+                        buf = editor_area.buffer
+                        match = re.search(r'\b' + re.escape(word) + r'\b',
+                                          buf.text, re.IGNORECASE)
+                        if match:
+                            buf.cursor_position = match.start()
+                            get_app().invalidate()
 
                 cmds = [
                     ("Export", "Export document", cmd_export),
