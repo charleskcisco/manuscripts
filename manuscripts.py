@@ -3597,7 +3597,7 @@ def create_app(storage):
                     text = editor_area.buffer.text
                     try:
                         proc = await asyncio.create_subprocess_exec(
-                            "aspell", "list",
+                            "aspell", "list", "--lang=en_US",
                             stdin=asyncio.subprocess.PIPE,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.DEVNULL,
@@ -3616,7 +3616,7 @@ def create_app(storage):
                     sugg_map = {}
                     try:
                         proc2 = await asyncio.create_subprocess_exec(
-                            "aspell", "-a",
+                            "aspell", "-a", "--lang=en_US",
                             stdin=asyncio.subprocess.PIPE,
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.DEVNULL,
