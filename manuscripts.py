@@ -2144,6 +2144,7 @@ class SpellCheckDialog:
             body=body,
             buttons=[ok_btn],
             modal=True,
+            width=D(preferred=40, min=40),
         )
 
     def __pt_container__(self):
