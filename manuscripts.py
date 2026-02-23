@@ -1192,19 +1192,33 @@ class WordWrapProcessor(Processor):
         return Transformation(new_fragments, source_to_display, display_to_source)
 
 
-class SpellHighlightProcessor(Processor):
-    """Highlights the current misspelled word in the editor."""
+class ActiveHighlightProcessor(Processor):
+    """Highlights the active find match or current spell-check word in the editor."""
 
     def __init__(self, state):
         self._state = state
 
-    def apply_transformation(self, ti):
-        if not (self._state.show_spell_panel and self._state.spell_panel
+    def _get_range(self):
+        """Return (abs_pos, abs_end, style_class) or None."""
+        if (self._state.show_spell_panel and self._state.spell_panel
                 and self._state.spell_panel.occurrences):
+            panel = self._state.spell_panel
+            word, pos = panel.occurrences[panel.current_idx]
+            return pos, pos + len(word), "class:spell-error"
+        if (self._state.show_find_panel and self._state.find_panel):
+            fp = self._state.find_panel
+            if fp.matches and 0 <= fp.match_idx < len(fp.matches):
+                pos = fp.matches[fp.match_idx]
+                length = len(fp.search_buf.text)
+                if length > 0:
+                    return pos, pos + length, "class:find-match"
+        return None
+
+    def apply_transformation(self, ti):
+        rng = self._get_range()
+        if rng is None:
             return Transformation(ti.fragments)
-        panel = self._state.spell_panel
-        word, abs_pos = panel.occurrences[panel.current_idx]
-        abs_end = abs_pos + len(word)
+        abs_pos, abs_end, hl_style = rng
         doc = ti.document
         line_start = doc.translate_row_col_to_index(ti.lineno, 0)
         line_text = ''.join(t for _, t, *__ in ti.fragments)
@@ -1226,7 +1240,7 @@ class SpellHighlightProcessor(Processor):
                 after = min(frag_end, disp_end) - pos
                 if before > 0:
                     new_frags.append((style, text[:before]) + tuple(rest))
-                new_frags.append(("class:spell-error", text[before:after]) + tuple(rest))
+                new_frags.append((hl_style, text[before:after]) + tuple(rest))
                 if after < len(text):
                     new_frags.append((style, text[after:]) + tuple(rest))
             pos = frag_end
@@ -2677,7 +2691,7 @@ def create_app(storage):
         style="class:editor",
         focus_on_click=True,
         lexer=MarkdownLexer(),
-        input_processors=[WordWrapProcessor(), SpellHighlightProcessor(state)],
+        input_processors=[WordWrapProcessor(), ActiveHighlightProcessor(state)],
     )
     editor_area.buffer.on_text_changed += lambda buf: setattr(state, 'editor_dirty', True)
 
@@ -3895,6 +3909,7 @@ def create_app(storage):
         "input": "bg:#333333 #e0e0e0",
         "editor": "",
         "spell-error": "bold #ff9999",
+        "find-match": "bold #e0af68",
         "select-list": "",
         "select-list.selected": "bg:#444444",
         "select-list.empty": "#777777",
