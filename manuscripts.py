@@ -2126,13 +2126,19 @@ class CommandPaletteDialog:
 
 class SpellCheckDialog:
     def __init__(self, misspelled):
+        self.future = asyncio.Future()
         if not misspelled:
             body = Label("  No misspellings found.")
         else:
             lines = "\n".join(f"  {w}" for w in sorted(set(misspelled)))
             body = TextArea(text=lines, read_only=True, scrollbar=True,
                             style="class:dialog.body")
-        ok_btn = Button("Close", handler=lambda: get_app().exit(result=True))
+
+        def _close():
+            if not self.future.done():
+                self.future.set_result(True)
+
+        ok_btn = Button("Close", handler=_close)
         self.container = Dialog(
             title="Spell Check",
             body=body,
