@@ -185,7 +185,7 @@ HTML_PAGE = """\
 
     function openFile(btn, path) {{
       btn.disabled = true;
-      fetch('/open/' + encodeURIComponent(path))
+      fetch('/open?path=' + encodeURIComponent(path))
         .then(r => r.json())
         .then(d => {{ if (!d.ok) btn.disabled = false; }})
         .catch(() => {{ btn.disabled = false; }});
@@ -372,7 +372,7 @@ async def handle_submit(request: web.Request) -> web.Response:
 
 
 async def handle_open(request: web.Request) -> web.Response:
-    raw = request.match_info.get("path", "")
+    raw = request.rel_url.query.get("path", "")
     try:
         dest = Path(raw).resolve()
         allowed = (Path.home() / "Downloads" / "Submissions").resolve()
@@ -425,7 +425,7 @@ async def run_server(teacher_name: str, port: int) -> web.AppRunner:
     app.router.add_get("/", handle_index)
     app.router.add_get("/events", handle_events)
     app.router.add_post("/submit", handle_submit)
-    app.router.add_get("/open/{path:.+}", handle_open)
+    app.router.add_get("/open", handle_open)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
