@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Build manuscripts-share for macOS.
+#
+# Usage:  ./build.sh [version]
+# Output: dist/manuscripts-share-mac-v{version}.zip
+#
+# The zip contains:
+#   manuscripts-share              (standalone binary, no Python needed)
+#   Open manuscripts-share.command (double-click in Finder to launch)
+
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+VERSION="${1:-1.0}"
+OUT="manuscripts-share-mac-v${VERSION}"
+
+echo "Building manuscripts-share v${VERSION} for macOS..."
+
+pip3 install --quiet pyinstaller aiohttp zeroconf
+
+pyinstaller --onefile \
+    --name manuscripts-share \
+    --collect-all zeroconf \
+    --collect-all aiohttp \
+    share.py
+
+# Create a double-clickable launcher (.command opens in Terminal on double-click)
+mkdir -p "dist/$OUT"
+cp "dist/manuscripts-share" "dist/$OUT/"
+cat > "dist/$OUT/Open manuscripts-share.command" << 'EOF'
+#!/bin/bash
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$DIR/manuscripts-share"
+EOF
+chmod +x "dist/$OUT/Open manuscripts-share.command"
+
+# Zip it up
+(cd dist && zip -r "${OUT}.zip" "$OUT")
+echo ""
+echo "Done: dist/${OUT}.zip"
+echo ""
+echo "Distribute this zip. Teachers unzip and double-click"
+echo "'Open manuscripts-share.command' to launch."
+echo ""
+echo "Note: on first run macOS may block the binary. Right-click → Open to bypass."

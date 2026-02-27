@@ -1,0 +1,89 @@
+name: Release manuscripts-share
+
+# Trigger by pushing a tag like: git tag share-v1.0 && git push origin share-v1.0
+on:
+  push:
+    tags:
+      - 'share-v*'
+
+jobs:
+  build-mac:
+    name: Build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build binary
+        run: |
+          cd manuscripts-share
+          pip install --quiet pyinstaller aiohttp zeroconf
+          pyinstaller --onefile \
+            --name manuscripts-share \
+            --collect-all zeroconf \
+            --collect-all aiohttp \
+            share.py
+      - name: Package
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. share-v1.0
+          VERSION="${TAG#share-v}"          # e.g. 1.0
+          OUT="manuscripts-share-mac-v${VERSION}"
+          mkdir -p "manuscripts-share/dist/$OUT"
+          cp "manuscripts-share/dist/manuscripts-share" "manuscripts-share/dist/$OUT/"
+          printf '#!/bin/bash\nDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nexec "$DIR/manuscripts-share"\n' \
+            > "manuscripts-share/dist/$OUT/Open manuscripts-share.command"
+          chmod +x "manuscripts-share/dist/$OUT/Open manuscripts-share.command"
+          (cd manuscripts-share/dist && zip -r "${OUT}.zip" "$OUT")
+          echo "ASSET=manuscripts-share/dist/${OUT}.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: ${{ env.ASSET }}
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build binary
+        run: |
+          cd manuscripts-share
+          pip install --quiet pyinstaller aiohttp zeroconf
+          pyinstaller --onefile --console `
+            --name manuscripts-share `
+            --collect-all zeroconf `
+            --collect-all aiohttp `
+            share.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: manuscripts-share/dist/manuscripts-share.exe
+
+  release:
+    name: Create GitHub Release
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: manuscripts-share ${{ github.ref_name }}
+          body: |
+            ## manuscripts-share ${{ github.ref_name }}
+
+            **macOS**: unzip and double-click `Open manuscripts-share.command`
+            *(first run: right-click → Open to bypass Gatekeeper)*
+
+            **Windows**: run `manuscripts-share.exe` from Command Prompt
+          files: |
+            artifacts/mac-build/*.zip
+            artifacts/windows-build/manuscripts-share.exe
