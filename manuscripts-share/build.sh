@@ -17,7 +17,10 @@ OUT="manuscripts-share-mac-v${VERSION}"
 
 echo "Building manuscripts-share v${VERSION} for macOS..."
 
-pip3 install --quiet pyinstaller aiohttp zeroconf
+# Use a build venv to avoid Homebrew's externally-managed-environment restriction
+python3 -m venv "${SCRIPT_DIR}/.build-venv"
+source "${SCRIPT_DIR}/.build-venv/bin/activate"
+pip install --quiet pyinstaller aiohttp zeroconf
 
 pyinstaller --onefile \
     --name manuscripts-share \
