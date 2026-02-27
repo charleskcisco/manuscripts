@@ -20,21 +20,31 @@ echo "Building manuscripts-share v${VERSION} for macOS..."
 # Use a build venv to avoid Homebrew's externally-managed-environment restriction
 python3 -m venv "${SCRIPT_DIR}/.build-venv"
 source "${SCRIPT_DIR}/.build-venv/bin/activate"
-pip install --quiet pyinstaller aiohttp zeroconf
+pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow \
+    pyobjc-framework-Cocoa pyobjc-framework-AppKit
 
-pyinstaller --onefile \
+python3 make_icons.py
+
+pyinstaller --onefile --windowed \
     --name manuscripts-share \
+    --icon icon.icns \
     --collect-all zeroconf \
     --collect-all aiohttp \
+    --collect-all pystray \
+    --hidden-import pystray._darwin \
+    --hidden-import tkinter \
+    --add-data "JetBrainsMono-Regular.ttf:." \
+    --add-data "JetBrainsMono-Light.ttf:." \
     share.py
 
-# Create a double-clickable launcher (.command opens in Terminal on double-click)
+# Create a double-clickable launcher that starts the app in the background
 mkdir -p "dist/$OUT"
 cp "dist/manuscripts-share" "dist/$OUT/"
 cat > "dist/$OUT/Open manuscripts-share.command" << 'EOF'
 #!/bin/bash
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$DIR/manuscripts-share"
+nohup "$DIR/manuscripts-share" >/dev/null 2>&1 &
+disown
 EOF
 chmod +x "dist/$OUT/Open manuscripts-share.command"
 

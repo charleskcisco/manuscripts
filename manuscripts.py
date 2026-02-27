@@ -2827,15 +2827,12 @@ def create_app(storage):
         if not teachers:
             show_notification(state, "No teacher found on network.")
             return
-        if len(teachers) == 1:
-            teacher_name, host, port, requires_auth = teachers[0]
-        else:
-            dlg = TeacherPickerDialog(teachers)
-            choice = await show_dialog_as_float(state, dlg)
-            if not choice:
-                show_notification(state, "Submission cancelled.")
-                return
-            teacher_name, host, port, requires_auth = choice
+        dlg = TeacherPickerDialog(teachers)
+        choice = await show_dialog_as_float(state, dlg)
+        if not choice:
+            show_notification(state, "Submission cancelled.")
+            return
+        teacher_name, host, port, requires_auth = choice
 
         # Password prompt if teacher requires it
         password = ""
@@ -2865,7 +2862,33 @@ def create_app(storage):
                     data=data,
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
-                    result = await resp.json()
+                    if resp.status == 401:
+                        # mDNS auth flag was stale or password was wrong — re-prompt
+                        dlg = InputDialog(
+                            "Password",
+                            f"Password required by {teacher_name}:",
+                            "",
+                        )
+                        password = await show_dialog_as_float(state, dlg)
+                        if not password:
+                            show_notification(state, "Submission cancelled.")
+                            return
+                        data2 = aiohttp.FormData()
+                        data2.add_field("student", student_name)
+                        data2.add_field("title", doc_title)
+                        data2.add_field("password", password)
+                        data2.add_field(
+                            "file", path.read_bytes(),
+                            filename=path.name, content_type="application/pdf",
+                        )
+                        async with session.post(
+                            f"http://{host}:{port}/submit",
+                            data=data2,
+                            timeout=aiohttp.ClientTimeout(total=30),
+                        ) as resp2:
+                            result = await resp2.json()
+                    else:
+                        result = await resp.json()
             if result.get("ok"):
                 show_notification(state, f"Submitted to {teacher_name}.")
             else:

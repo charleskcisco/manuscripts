@@ -2,22 +2,27 @@
 """
 manuscripts-share — receives PDF submissions from peers over LAN.
 
-Usage:
-    python share.py
-
-Opens a browser dashboard at http://localhost:{port}/ and advertises itself
-on the local network as a submission target for manuscripts.py.
+A system-tray GUI app (macOS and Windows) that receives PDF submissions
+from manuscripts.py and shows them in a browser dashboard.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import platform
 import re
 import socket
+import subprocess
 import sys
+import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+
+import pystray
+import tkinter as tk
+from tkinter import ttk
+from PIL import Image, ImageDraw
 
 from aiohttp import web
 from zeroconf import IPVersion
@@ -194,52 +199,6 @@ def _save_config(cfg: dict) -> None:
     _CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
 
-def _get_teacher_name() -> str:
-    cfg = _load_config()
-    if cfg.get("name"):
-        return cfg["name"]
-    try:
-        name = input("Your name (shown to peers): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        name = ""
-    if not name:
-        name = "Teacher"
-    cfg["name"] = name
-    _save_config(cfg)
-    return name
-
-
-def _get_teacher_password() -> str:
-    """Prompt for a submission password. Empty string means no password required."""
-    cfg = _load_config()
-    existing = cfg.get("password", "")
-    if existing:
-        print(f"  password: (saved)  — press Enter to keep, or type a new one, or 'none' to remove")
-        try:
-            new = input("  Password: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            return existing
-        if new.lower() == "none":
-            del cfg["password"]
-            _save_config(cfg)
-            return ""
-        if new:
-            cfg["password"] = new
-            _save_config(cfg)
-            return new
-        return existing
-    else:
-        print("  Leave blank for no password.")
-        try:
-            pwd = input("  Submission password: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            pwd = ""
-        if pwd:
-            cfg["password"] = pwd
-            _save_config(cfg)
-        return pwd
-
-
 # ── Network helpers ──────────────────────────────────────────────────────────
 
 def _get_local_ip() -> str:
@@ -265,6 +224,249 @@ def _find_free_port() -> int:
             except OSError:
                 continue
     return _DEFAULT_PORT  # unreachable
+
+
+# ── Setup dialog ─────────────────────────────────────────────────────────────
+
+def show_setup_dialog() -> tuple[str, str] | None:
+    """Show the name/password dialog. Returns (name, password) or None if cancelled."""
+    cfg = _load_config()
+    result: list[tuple[str, str] | None] = [None]
+
+    root = tk.Tk()
+    root.title("manuscripts-share")
+    root.resizable(False, False)
+
+    # Center on screen
+    w, h = 380, 200
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() - w) // 2
+    y = (root.winfo_screenheight() - h) // 2
+    root.geometry(f"{w}x{h}+{x}+{y}")
+
+    frame = ttk.Frame(root, padding=24)
+    frame.pack(fill=tk.BOTH, expand=True)
+    frame.columnconfigure(1, weight=1)
+
+    ttk.Label(frame, text="Your name:").grid(row=0, column=0, sticky=tk.W, pady=7)
+    name_var = tk.StringVar(value=cfg.get("name", ""))
+    name_entry = ttk.Entry(frame, textvariable=name_var, width=26)
+    name_entry.grid(row=0, column=1, sticky=tk.EW, padx=(12, 0), pady=7)
+
+    ttk.Label(frame, text="Password:").grid(row=1, column=0, sticky=tk.W, pady=7)
+    pw_var = tk.StringVar(value=cfg.get("password", ""))
+    pw_entry = ttk.Entry(frame, textvariable=pw_var, width=26, show="\u2022")
+    pw_entry.grid(row=1, column=1, sticky=tk.EW, padx=(12, 0), pady=7)
+    ttk.Label(frame, text="leave blank for none", foreground="gray").grid(
+        row=2, column=1, sticky=tk.W, padx=(12, 0)
+    )
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=3, column=0, columnspan=2, pady=(18, 0), sticky=tk.E)
+
+    def _ok(event=None):
+        name = name_var.get().strip() or "Teacher"
+        pw = pw_var.get().strip()
+        cfg["name"] = name
+        if pw:
+            cfg["password"] = pw
+        elif "password" in cfg:
+            del cfg["password"]
+        _save_config(cfg)
+        result[0] = (name, pw)
+        root.destroy()
+
+    def _cancel(event=None):
+        root.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=_cancel).pack(side=tk.LEFT, padx=4)
+    ttk.Button(btn_frame, text="Start", command=_ok).pack(side=tk.LEFT)
+
+    root.bind("<Return>", _ok)
+    root.bind("<Escape>", _cancel)
+    root.protocol("WM_DELETE_WINDOW", _cancel)
+    name_entry.focus_set()
+    root.mainloop()
+
+    return result[0]
+
+
+# ── Tray icon image ──────────────────────────────────────────────────────────
+
+def _load_font(size: int, weight: str = "Light") -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
+    from PIL import ImageFont
+    names = [f"JetBrainsMono-{weight}.ttf", "JetBrainsMono-Regular.ttf"]
+    candidates = []
+    for name in names:
+        candidates += [
+            Path(__file__).parent / name,
+            *(
+                [Path(sys._MEIPASS) / name]
+                if hasattr(sys, "_MEIPASS") else []
+            ),
+            Path.home() / "Library" / "Fonts" / name,
+            Path(f"/Library/Fonts/{name}"),
+            Path(f"/usr/share/fonts/truetype/jetbrains-mono/{name}"),
+        ]
+    for p in candidates:
+        if p.exists():
+            try:
+                return ImageFont.truetype(str(p), size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def _make_icon_image() -> Image.Image:
+    from PIL import ImageFont
+    size = 128
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Subtle rounded square outline
+    draw.rounded_rectangle([4, 4, size - 4, size - 4], radius=14,
+                           outline=(255, 255, 255, 60), width=3)
+
+    # Light weight text
+    font = _load_font(80, weight="Light")
+    text = "m."
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    x = (size - tw) / 2 - bbox[0]
+    y = (size - th) / 2 - bbox[1]
+    draw.text((x, y), text, font=font, fill="#FFFFFF")
+
+    return img
+
+
+# ── Global server state (shared across threads) ───────────────────────────────
+
+_submission_count = 0
+_dashboard_url = ""
+_asyncio_loop: asyncio.AbstractEventLoop | None = None
+_stop_event: asyncio.Event | None = None
+_server_ready = threading.Event()
+_tray_icon: pystray.Icon | None = None
+_password_ref: list[str] = [""]  # mutable so handle_submit always sees current value
+_mdns_zc: AsyncZeroconf | None = None
+_mdns_info: AsyncServiceInfo | None = None
+_mdns_teacher_name: str = ""
+
+
+# ── Tray menu & actions ───────────────────────────────────────────────────────
+
+def _open_dashboard(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    webbrowser.open(_dashboard_url)
+
+
+def _quit_app(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    if _asyncio_loop and _stop_event:
+        _asyncio_loop.call_soon_threadsafe(_stop_event.set)
+    icon.stop()
+
+
+def _make_menu() -> pystray.Menu:
+    def _count_label(item: pystray.MenuItem) -> str:
+        n = _submission_count
+        return f"{n} submission{'s' if n != 1 else ''} received"
+
+    def _pw_label(item: pystray.MenuItem) -> str:
+        return "Change Password  [set]" if _password_ref[0] else "Change Password  [none]"
+
+    return pystray.Menu(
+        pystray.MenuItem(_count_label, None, enabled=False),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Open Dashboard", _open_dashboard),
+        pystray.MenuItem(_pw_label, _change_password),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Quit", _quit_app),
+    )
+
+
+def _prompt_password() -> str | None:
+    """Show a password-entry dialog. Returns the new password, "" to clear, or None if cancelled."""
+    if platform.system() == "Darwin":
+        r = subprocess.run(
+            ["osascript", "-e",
+             'display dialog "New submission password (leave blank to remove):" '
+             'default answer "" with hidden answer '
+             'buttons {"Cancel", "OK"} default button "OK"'],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        for part in r.stdout.strip().split(", "):
+            if part.startswith("text returned:"):
+                return part[len("text returned:"):]
+        return ""
+    else:
+        # Windows: tkinter works fine from a non-main thread
+        from tkinter import simpledialog
+        result: list[str | None] = [None]
+        done = threading.Event()
+
+        def _show() -> None:
+            root = tk.Tk()
+            root.withdraw()
+            pw = simpledialog.askstring(
+                "Change Password",
+                "New submission password\n(leave blank to remove):",
+                show="\u2022",
+                parent=root,
+            )
+            root.destroy()
+            result[0] = pw
+            done.set()
+
+        threading.Thread(target=_show, daemon=True).start()
+        done.wait(timeout=60)
+        return result[0]
+
+
+async def _reregister_mdns(new_pw: str) -> None:
+    """Re-register the mDNS service with an updated auth flag."""
+    global _mdns_info
+    if _mdns_zc is None or _mdns_info is None:
+        return
+    await _mdns_zc.async_unregister_service(_mdns_info)
+    new_info = AsyncServiceInfo(
+        type_="_manuscripts._tcp.local.",
+        name=f"{_mdns_teacher_name}._manuscripts._tcp.local.",
+        addresses=_mdns_info.addresses,
+        port=_mdns_info.port,
+        properties={
+            "teacher": _mdns_teacher_name,
+            "version": "1",
+            "auth": "1" if new_pw else "0",
+        },
+        server=_mdns_info.server,
+    )
+    await _mdns_zc.async_register_service(new_info)
+    _mdns_info = new_info
+
+
+def _change_password(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    new_pw = _prompt_password()
+    if new_pw is None:
+        return  # cancelled
+    new_pw = new_pw.strip()
+    _password_ref[0] = new_pw
+    cfg = _load_config()
+    if new_pw:
+        cfg["password"] = new_pw
+    elif "password" in cfg:
+        del cfg["password"]
+    _save_config(cfg)
+    # Update the mDNS auth flag so clients see the change immediately
+    if _asyncio_loop:
+        asyncio.run_coroutine_threadsafe(_reregister_mdns(new_pw), _asyncio_loop)
+
+
+# ── Submission callback (called from asyncio thread) ─────────────────────────
+
+def _on_submission() -> None:
+    global _submission_count
+    _submission_count += 1
 
 
 # ── SSE manager ──────────────────────────────────────────────────────────────
@@ -314,9 +516,7 @@ async def handle_events(request: web.Request) -> web.StreamResponse:
         "X-Accel-Buffering": "no",
     })
     await resp.prepare(request)
-    # Send current count to new client immediately
     await resp.write(f"event: count\ndata: {sse.count}\n\n".encode())
-    # Broadcast updated count to all
     await sse.broadcast("count", str(sse.count))
     try:
         while True:
@@ -324,7 +524,6 @@ async def handle_events(request: web.Request) -> web.StreamResponse:
                 chunk = await asyncio.wait_for(q.get(), timeout=20.0)
                 await resp.write(chunk.encode())
             except asyncio.TimeoutError:
-                # Send keepalive comment to hold the connection open
                 await resp.write(b": keepalive\n\n")
     except ConnectionResetError:
         pass
@@ -336,7 +535,8 @@ async def handle_events(request: web.Request) -> web.StreamResponse:
 
 async def handle_submit(request: web.Request) -> web.Response:
     sse: SSEManager = request.app["sse"]
-    required_password: str = request.app["password"]
+    required_password: str = request.app["password_ref"][0]
+    on_sub = request.app["on_submission"]
     try:
         reader = await request.multipart()
         student = ""
@@ -379,6 +579,7 @@ async def handle_submit(request: web.Request) -> web.Response:
                 i += 1
 
         dest.write_bytes(file_bytes)
+        on_sub()
 
         event_data = json.dumps({
             "time": datetime.now().strftime("%H:%M"),
@@ -391,7 +592,6 @@ async def handle_submit(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "saved": str(dest)})
     except Exception as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=500)
-
 
 
 # ── mDNS advertisement ───────────────────────────────────────────────────────
@@ -421,12 +621,15 @@ async def advertise_mdns(
 
 # ── Server setup ─────────────────────────────────────────────────────────────
 
-async def run_server(teacher_name: str, port: int, password: str = "") -> web.AppRunner:
+async def run_server(
+    teacher_name: str, port: int, password_ref: list[str] | None = None, on_submission=None
+) -> web.AppRunner:
     sse = SSEManager()
     app = web.Application()
     app["sse"] = sse
-    app["password"] = password
+    app["password_ref"] = password_ref if password_ref is not None else _password_ref
     app["html"] = HTML_PAGE.format(teacher_name=teacher_name)
+    app["on_submission"] = on_submission or (lambda: None)
     app.router.add_get("/", handle_index)
     app.router.add_get("/events", handle_events)
     app.router.add_post("/submit", handle_submit)
@@ -436,39 +639,66 @@ async def run_server(teacher_name: str, port: int, password: str = "") -> web.Ap
     return runner
 
 
+# ── Asyncio server thread ────────────────────────────────────────────────────
+
+def _run_server_thread(teacher_name: str, port: int, password: str) -> None:
+    global _asyncio_loop, _stop_event, _mdns_zc, _mdns_info, _mdns_teacher_name
+    _password_ref[0] = password
+    _mdns_teacher_name = teacher_name
+
+    async def _main() -> None:
+        global _asyncio_loop, _stop_event, _mdns_zc, _mdns_info
+        _asyncio_loop = asyncio.get_running_loop()
+        _stop_event = asyncio.Event()
+
+        runner = await run_server(teacher_name, port, _password_ref, _on_submission)
+        zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
+        info = await advertise_mdns(teacher_name, port, zc, password)
+        _mdns_zc = zc
+        _mdns_info = info
+
+        _server_ready.set()
+        await _stop_event.wait()
+
+        await zc.async_unregister_service(info)
+        await zc.async_close()
+        await runner.cleanup()
+
+    asyncio.run(_main())
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
-    print("\nmanuscripts-share setup")
-    teacher_name = _get_teacher_name()
-    password = _get_teacher_password()
+    global _dashboard_url, _tray_icon
+
+    setup = show_setup_dialog()
+    if setup is None:
+        sys.exit(0)
+    teacher_name, password = setup
+
     port = _find_free_port()
-    url = f"http://localhost:{port}/"
+    _dashboard_url = f"http://localhost:{port}/"
 
-    print(f"\nmanuscripts-share")
-    print(f"  teacher  : {teacher_name}")
-    print(f"  password : {'(set)' if password else '(none)'}")
-    print(f"  address  : {url}")
-    print(f"\nPress Ctrl+C to stop.\n")
+    # Start aiohttp + zeroconf in background thread
+    server_thread = threading.Thread(
+        target=_run_server_thread,
+        args=(teacher_name, port, password),
+        daemon=True,
+    )
+    server_thread.start()
+    _server_ready.wait(timeout=10)
 
-    async def _run() -> None:
-        runner = await run_server(teacher_name, port, password)
-        zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
-        info = await advertise_mdns(teacher_name, port, zc, password)
-        webbrowser.open(url)
-        try:
-            await asyncio.sleep(float("inf"))
-        except (asyncio.CancelledError, KeyboardInterrupt):
-            pass
-        finally:
-            await zc.async_unregister_service(info)
-            await zc.async_close()
-            await runner.cleanup()
+    webbrowser.open(_dashboard_url)
 
-    try:
-        asyncio.run(_run())
-    except KeyboardInterrupt:
-        pass
+    # Run system tray icon on main thread (blocks until Quit)
+    _tray_icon = pystray.Icon(
+        "manuscripts-share",
+        _make_icon_image(),
+        "manuscripts-share",
+        menu=_make_menu(),
+    )
+    _tray_icon.run()
 
 
 if __name__ == "__main__":

@@ -11,14 +11,23 @@ if "%VERSION%"=="" set VERSION=1.0
 
 echo Building manuscripts-share v%VERSION% for Windows...
 
-pip install --quiet pyinstaller aiohttp zeroconf
+pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pywin32
 
-pyinstaller --onefile --console ^
+python make_icons.py
+
+pyinstaller --onefile --noconsole ^
+    --icon icon.ico ^
     --name manuscripts-share ^
     --collect-all zeroconf ^
     --collect-all aiohttp ^
+    --collect-all pystray ^
+    --hidden-import pystray._win32 ^
+    --hidden-import tkinter ^
+    --add-data "JetBrainsMono-Regular.ttf;." ^
+    --add-data "JetBrainsMono-Light.ttf;." ^
     share.py
 
 echo.
 echo Done: dist\manuscripts-share.exe
 echo Distribute this .exe directly — no Python installation needed.
+echo Double-click it to launch the system tray app.

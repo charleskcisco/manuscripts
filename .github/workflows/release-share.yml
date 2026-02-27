@@ -1,6 +1,6 @@
 name: Release manuscripts-share
 
-# Trigger by pushing a tag like: git tag share-v1.0 && git push origin share-v1.0
+# Trigger by pushing a tag like: git tag share-v1.1 && git push origin share-v1.1
 on:
   push:
     tags:
@@ -18,20 +18,28 @@ jobs:
       - name: Build binary
         run: |
           cd manuscripts-share
-          pip install --quiet pyinstaller aiohttp zeroconf
-          pyinstaller --onefile \
+          pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow \
+            pyobjc-framework-Cocoa pyobjc-framework-AppKit
+          python make_icons.py
+          pyinstaller --onefile --windowed \
             --name manuscripts-share \
+            --icon icon.icns \
             --collect-all zeroconf \
             --collect-all aiohttp \
+            --collect-all pystray \
+            --hidden-import pystray._darwin \
+            --hidden-import tkinter \
+            --add-data "JetBrainsMono-Regular.ttf:." \
+            --add-data "JetBrainsMono-Light.ttf:." \
             share.py
       - name: Package
         run: |
-          TAG="${GITHUB_REF_NAME}"          # e.g. share-v1.0
-          VERSION="${TAG#share-v}"          # e.g. 1.0
+          TAG="${GITHUB_REF_NAME}"          # e.g. share-v1.1
+          VERSION="${TAG#share-v}"          # e.g. 1.1
           OUT="manuscripts-share-mac-v${VERSION}"
           mkdir -p "manuscripts-share/dist/$OUT"
           cp "manuscripts-share/dist/manuscripts-share" "manuscripts-share/dist/$OUT/"
-          printf '#!/bin/bash\nDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nexec "$DIR/manuscripts-share"\n' \
+          printf '#!/bin/bash\nDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nnohup "$DIR/manuscripts-share" >/dev/null 2>&1 &\ndisown\n' \
             > "manuscripts-share/dist/$OUT/Open manuscripts-share.command"
           chmod +x "manuscripts-share/dist/$OUT/Open manuscripts-share.command"
           (cd manuscripts-share/dist && zip -r "${OUT}.zip" "$OUT")
@@ -52,11 +60,17 @@ jobs:
       - name: Build binary
         run: |
           cd manuscripts-share
-          pip install --quiet pyinstaller aiohttp zeroconf
-          pyinstaller --onefile --console `
+          pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pywin32
+          python make_icons.py
+          pyinstaller --onefile --noconsole `
             --name manuscripts-share `
+            --icon icon.ico `
             --collect-all zeroconf `
             --collect-all aiohttp `
+            --collect-all pystray `
+            --hidden-import pystray._win32 `
+            --hidden-import tkinter `
+            "--add-data" "JetBrainsMono-Regular.ttf;." `
             share.py
       - uses: actions/upload-artifact@v4
         with:
@@ -83,7 +97,11 @@ jobs:
             **macOS**: unzip and double-click `Open manuscripts-share.command`
             *(first run: right-click → Open to bypass Gatekeeper)*
 
-            **Windows**: run `manuscripts-share.exe` from Command Prompt
+            **Windows**: double-click `manuscripts-share.exe`
+            *(first run: click "More info" → "Run anyway" to bypass SmartScreen)*
+
+            A setup dialog will appear on first launch to set your name and password.
+            The app then runs in the system tray — look for the gold icon.
           files: |
             artifacts/mac-build/*.zip
             artifacts/windows-build/manuscripts-share.exe

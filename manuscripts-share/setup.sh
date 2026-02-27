@@ -13,13 +13,13 @@ if command -v uv &>/dev/null; then
     echo "  Using uv..."
     uv venv "${SCRIPT_DIR}/.venv" --quiet
     uv pip install --quiet --python "${SCRIPT_DIR}/.venv/bin/python3" \
-        aiohttp zeroconf
+        aiohttp zeroconf pystray Pillow
 else
     echo "  Using python3 venv..."
     if [ ! -d "${SCRIPT_DIR}/.venv" ]; then
         python3 -m venv "${SCRIPT_DIR}/.venv"
     fi
-    "${SCRIPT_DIR}/.venv/bin/pip" install --quiet aiohttp zeroconf
+    "${SCRIPT_DIR}/.venv/bin/pip" install --quiet aiohttp zeroconf pystray Pillow
 fi
 
 echo "Done. Run with: ./run.sh"

@@ -20,6 +20,7 @@ sudo apt install -y \
     pandoc libreoffice \
     cups cups-client lpr \
     git cage foot \
+    fonts-jetbrains-mono \
     python3 python3-pip python3-venv
 
 # Python venv + Manuscripts dependencies
