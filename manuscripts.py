@@ -1347,6 +1347,7 @@ class AppState:
         self.spell_panel = None
         self.shutdown_pending = 0.0
         self.pinned_projects: set[str] = set(_load_config().get("pinned", []))
+        self.student_name: str = _load_config().get("student_name", "")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1387,6 +1388,43 @@ async def show_dialog_as_float(state, dialog):
         pass
     app.invalidate()
     return result
+
+
+async def _discover_teachers(timeout: float = 3.0) -> list:
+    """Browse for _manuscripts._tcp.local. services via mDNS.
+
+    Returns a list of (teacher_name, host, port) tuples.
+    Returns [] if zeroconf is not installed.
+    """
+    try:
+        from zeroconf import ServiceBrowser, ServiceStateChange
+        from zeroconf.asyncio import AsyncZeroconf
+    except ImportError:
+        return []
+
+    found: list = []
+
+    def _on_change(zeroconf, service_type, name, state_change):
+        if state_change is ServiceStateChange.Added:
+            info = zeroconf.get_service_info(service_type, name)
+            if info and info.addresses:
+                import socket as _socket
+                host = _socket.inet_ntoa(info.addresses[0])
+                teacher = (info.properties.get(b"teacher") or b"").decode(
+                    "utf-8", errors="replace"
+                )
+                if not teacher:
+                    teacher = name.split("._manuscripts")[0]
+                found.append((teacher, host, info.port))
+
+    zc = AsyncZeroconf()
+    browser = ServiceBrowser(
+        zc.zeroconf, "_manuscripts._tcp.local.", handlers=[_on_change]
+    )
+    await asyncio.sleep(timeout)
+    browser.cancel()
+    await zc.async_close()
+    return found
 
 
 def _detect_printers():
@@ -1635,6 +1673,42 @@ class PrinterPickerDialog:
             pass
         if not self.future.done():
             self.future.set_result(printer)
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class TeacherPickerDialog:
+    """Pick a teacher server from discovered mDNS peers."""
+
+    def __init__(self, teachers):
+        self.future = asyncio.Future()
+        self._teachers = teachers
+        self.list = SelectableList(on_select=self._select)
+        self.list.set_items([
+            (i, f"  {name}  ·  {host}:{port}")
+            for i, (name, host, port) in enumerate(teachers)
+        ])
+
+        @self.list._kb.add("escape", eager=True)
+        def _escape(event):
+            self.cancel()
+
+        self.dialog = Dialog(
+            title="Choose Teacher",
+            body=HSplit([self.list]),
+            buttons=[Button(text="Cancel", handler=self.cancel)],
+            modal=True,
+            width=D(preferred=50, max=60),
+        )
+
+    def _select(self, idx):
+        if not self.future.done():
+            self.future.set_result(self._teachers[idx])
 
     def cancel(self):
         if not self.future.done():
@@ -2759,7 +2833,7 @@ def create_app(storage):
     ])
 
     exports_hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (m) manuscripts  (d) delete")])
+        lambda: [("class:hint", " (m) manuscripts  (d) delete  (s) submit")])
     exports_hints_window = Window(content=exports_hints_control, height=1)
 
     exports_view = HSplit([
@@ -3444,6 +3518,90 @@ def create_app(storage):
         else:
             state.mass_export_pending = now
             show_notification(state, "Press m again to export all as Markdown.", duration=2.0)
+
+    @kb.add("s", filter=projects_list_focused)
+    def _(event):
+        if not state.showing_exports:
+            return
+        idx = export_list.selected_index
+        if idx >= len(state.export_paths):
+            return
+        path = state.export_paths[idx]
+        if path.suffix.lower() != ".pdf":
+            show_notification(state, "Only PDF files can be submitted.")
+            return
+
+        async def _do():
+            # Student name: frontmatter author > saved config > prompt
+            student_name = ""
+            if state.current_project:
+                fm = parse_yaml_frontmatter(state.current_project.content)
+                student_name = fm.get("author", "").strip()
+            if not student_name:
+                student_name = state.student_name
+            if not student_name:
+                dlg = InputDialog(
+                    "Your Name",
+                    "Enter your name (shown to teacher):",
+                    state.student_name or "",
+                )
+                student_name = await show_dialog_as_float(state, dlg)
+                if not student_name:
+                    show_notification(state, "Submission cancelled.")
+                    return
+                state.student_name = student_name
+                cfg = _load_config()
+                cfg["student_name"] = student_name
+                _save_config(cfg)
+
+            # Discover teacher(s) on LAN
+            show_notification(state, "Looking for teacher\u2026", duration=5.0)
+            teachers = await _discover_teachers(timeout=3.0)
+            if not teachers:
+                show_notification(state, "No teacher found on network.")
+                return
+            if len(teachers) == 1:
+                teacher_name, host, port = teachers[0]
+            else:
+                dlg = TeacherPickerDialog(teachers)
+                choice = await show_dialog_as_float(state, dlg)
+                if not choice:
+                    show_notification(state, "Submission cancelled.")
+                    return
+                teacher_name, host, port = choice
+
+            # POST the PDF to the teacher's server
+            show_notification(state, f"Sending to {teacher_name}\u2026", duration=10.0)
+            doc_title = path.stem
+            try:
+                import aiohttp
+                data = aiohttp.FormData()
+                data.add_field("student", student_name)
+                data.add_field("title", doc_title)
+                data.add_field(
+                    "file", path.read_bytes(),
+                    filename=path.name, content_type="application/pdf",
+                )
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"http://{host}:{port}/submit",
+                        data=data,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        result = await resp.json()
+                if result.get("ok"):
+                    show_notification(state, f"Submitted to {teacher_name}.")
+                else:
+                    show_notification(
+                        state,
+                        f"Submission failed: {result.get('error', 'unknown')}",
+                    )
+            except ImportError:
+                show_notification(state, "Run: pip install aiohttp zeroconf")
+            except Exception as exc:
+                show_notification(state, f"Submission failed: {str(exc)[:60]}")
+
+        asyncio.ensure_future(_do())
 
     @kb.add("p", filter=projects_list_focused)
     def _(event):

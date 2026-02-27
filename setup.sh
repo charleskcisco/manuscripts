@@ -16,6 +16,6 @@ if [ ! -d "${SCRIPT_DIR}/.venv" ]; then
 fi
 
 echo "  Installing dependencies..."
-"${SCRIPT_DIR}/.venv/bin/pip" install --quiet prompt_toolkit pygments
+"${SCRIPT_DIR}/.venv/bin/pip" install --quiet prompt_toolkit pygments aiohttp zeroconf
 
 echo "Done. Run with: ./run.sh"
