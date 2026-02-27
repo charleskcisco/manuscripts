@@ -15,12 +15,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Build binary
+      - name: Build app
         run: |
           cd manuscripts-share
           pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
           python make_icons.py
-          pyinstaller --onefile --windowed \
+          pyinstaller --onedir --windowed \
             --name manuscripts-share \
             --icon icon.icns \
             --collect-all zeroconf \
@@ -31,18 +31,21 @@ jobs:
             --add-data "JetBrainsMono-Regular.ttf:." \
             --add-data "JetBrainsMono-Light.ttf:." \
             share.py
-      - name: Package
+      - name: Package DMG
         run: |
-          TAG="${GITHUB_REF_NAME}"          # e.g. share-v1.1
-          VERSION="${TAG#share-v}"          # e.g. 1.1
-          OUT="manuscripts-share-mac-v${VERSION}"
-          mkdir -p "manuscripts-share/dist/$OUT"
-          cp "manuscripts-share/dist/manuscripts-share" "manuscripts-share/dist/$OUT/"
-          printf '#!/bin/bash\nDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nnohup "$DIR/manuscripts-share" >/dev/null 2>&1 &\ndisown\n' \
-            > "manuscripts-share/dist/$OUT/Open manuscripts-share.command"
-          chmod +x "manuscripts-share/dist/$OUT/Open manuscripts-share.command"
-          (cd manuscripts-share/dist && zip -r "${OUT}.zip" "$OUT")
-          echo "ASSET=manuscripts-share/dist/${OUT}.zip" >> "$GITHUB_ENV"
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#share-v}"
+          DMG="manuscripts-share-mac-v${VERSION}.dmg"
+          mkdir manuscripts-share/dist/dmg-staging
+          cp -r "manuscripts-share/dist/manuscripts-share.app" "manuscripts-share/dist/dmg-staging/"
+          ln -s /Applications "manuscripts-share/dist/dmg-staging/Applications"
+          hdiutil create \
+            -volname "manuscripts-share" \
+            -srcfolder "manuscripts-share/dist/dmg-staging" \
+            -ov \
+            -format UDZO \
+            "manuscripts-share/dist/${DMG}"
+          echo "ASSET=manuscripts-share/dist/${DMG}" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: mac-build
@@ -70,6 +73,7 @@ jobs:
             --hidden-import pystray._win32 `
             --hidden-import tkinter `
             "--add-data" "JetBrainsMono-Regular.ttf;." `
+            "--add-data" "JetBrainsMono-Light.ttf;." `
             share.py
       - uses: actions/upload-artifact@v4
         with:
@@ -93,7 +97,7 @@ jobs:
           body: |
             ## manuscripts-share ${{ github.ref_name }}
 
-            **macOS**: unzip and double-click `Open manuscripts-share.command`
+            **macOS**: open the DMG, drag `manuscripts-share` to Applications
             *(first run: right-click → Open to bypass Gatekeeper)*
 
             **Windows**: double-click `manuscripts-share.exe`
@@ -102,5 +106,5 @@ jobs:
             A setup dialog will appear on first launch to set your name and password.
             The app then runs in the system tray — look for the gold icon.
           files: |
-            artifacts/mac-build/*.zip
+            artifacts/mac-build/*.dmg
             artifacts/windows-build/manuscripts-share.exe

@@ -2,18 +2,14 @@
 # Build manuscripts-share for macOS.
 #
 # Usage:  ./build.sh [version]
-# Output: dist/manuscripts-share-mac-v{version}.zip
-#
-# The zip contains:
-#   manuscripts-share              (standalone binary, no Python needed)
-#   Open manuscripts-share.command (double-click in Finder to launch)
+# Output: dist/manuscripts-share-mac-v{version}.dmg
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 VERSION="${1:-1.0}"
-OUT="manuscripts-share-mac-v${VERSION}"
+DMG="manuscripts-share-mac-v${VERSION}.dmg"
 
 echo "Building manuscripts-share v${VERSION} for macOS..."
 
@@ -24,7 +20,7 @@ pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
 
 python3 make_icons.py
 
-pyinstaller --onefile --windowed \
+pyinstaller --onedir --windowed \
     --name manuscripts-share \
     --icon icon.icns \
     --collect-all zeroconf \
@@ -36,23 +32,23 @@ pyinstaller --onefile --windowed \
     --add-data "JetBrainsMono-Light.ttf:." \
     share.py
 
-# Create a double-clickable launcher that starts the app in the background
-mkdir -p "dist/$OUT"
-cp "dist/manuscripts-share" "dist/$OUT/"
-cat > "dist/$OUT/Open manuscripts-share.command" << 'EOF'
-#!/bin/bash
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-nohup "$DIR/manuscripts-share" >/dev/null 2>&1 &
-disown
-EOF
-chmod +x "dist/$OUT/Open manuscripts-share.command"
+# Build DMG with an Applications symlink for drag-and-drop install
+rm -rf dist/dmg-staging
+mkdir dist/dmg-staging
+cp -r "dist/manuscripts-share.app" "dist/dmg-staging/"
+ln -s /Applications "dist/dmg-staging/Applications"
 
-# Zip it up
-(cd dist && zip -r "${OUT}.zip" "$OUT")
+hdiutil create \
+    -volname "manuscripts-share" \
+    -srcfolder "dist/dmg-staging" \
+    -ov \
+    -format UDZO \
+    "dist/${DMG}"
+
+rm -rf dist/dmg-staging
+
 echo ""
-echo "Done: dist/${OUT}.zip"
+echo "Done: dist/${DMG}"
 echo ""
-echo "Distribute this zip. Teachers unzip and double-click"
-echo "'Open manuscripts-share.command' to launch."
-echo ""
-echo "Note: on first run macOS may block the binary. Right-click → Open to bypass."
+echo "Distribute this DMG. Users open it, drag manuscripts-share to Applications."
+echo "Note: on first run macOS may block the app. Right-click → Open to bypass."
