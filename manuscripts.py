@@ -1691,7 +1691,7 @@ class TeacherPickerDialog:
         self._teachers = teachers
         self.list = SelectableList(on_select=self._select)
         self.list.set_items([
-            (i, f"  {name}  ·  {host}:{port}")
+            (i, f"  {name}")
             for i, (name, host, port, _) in enumerate(teachers)
         ])
 
@@ -2943,7 +2943,7 @@ def create_app(storage):
 
     projects_view = HSplit([
         VSplit([
-            Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
+            Window(FormattedTextControl([("fg:#e0af68 bold", " manuscripts")]),
                    height=1, dont_extend_height=True),
             Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
