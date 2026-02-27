@@ -373,12 +373,15 @@ async def handle_submit(request: web.Request) -> web.Response:
 
 async def handle_open(request: web.Request) -> web.Response:
     raw = request.rel_url.query.get("path", "")
+    print(f"[open] raw={repr(raw)}", flush=True)
     try:
         dest = Path(raw).resolve()
         allowed = (Path.home() / "Downloads" / "Submissions").resolve()
+        print(f"[open] dest={dest}  allowed={allowed}  ok={str(dest).startswith(str(allowed))}", flush=True)
         if not str(dest).startswith(str(allowed)):
             return web.json_response({"ok": False, "error": "Forbidden"}, status=403)
         if not dest.exists():
+            print(f"[open] file not found", flush=True)
             return web.json_response({"ok": False, "error": "Not found"}, status=404)
         system = platform.system()
         if system == "Darwin":
@@ -389,6 +392,7 @@ async def handle_open(request: web.Request) -> web.Response:
             subprocess.Popen(["xdg-open", str(dest)])
         return web.json_response({"ok": True})
     except Exception as exc:
+        print(f"[open] exception: {exc}", flush=True)
         return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
 
