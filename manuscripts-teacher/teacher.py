@@ -151,8 +151,10 @@ HTML_PAGE = """\
     const connEl = document.getElementById('conn-count');
     let count = 0;
 
+    let _es = null;
     function connect() {{
-      const es = new EventSource('/events');
+      if (_es) {{ _es.close(); _es = null; }}
+      const es = _es = new EventSource('/events');
 
       es.addEventListener('submission', e => {{
         const d = JSON.parse(e.data);
@@ -304,9 +306,13 @@ async def handle_events(request: web.Request) -> web.StreamResponse:
     await sse.broadcast("count", str(sse.count))
     try:
         while True:
-            chunk = await asyncio.wait_for(q.get(), timeout=25.0)
-            await resp.write(chunk.encode())
-    except (asyncio.TimeoutError, ConnectionResetError):
+            try:
+                chunk = await asyncio.wait_for(q.get(), timeout=20.0)
+                await resp.write(chunk.encode())
+            except asyncio.TimeoutError:
+                # Send keepalive comment to hold the connection open
+                await resp.write(b": keepalive\n\n")
+    except ConnectionResetError:
         pass
     finally:
         sse.disconnect(q)
