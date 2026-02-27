@@ -12,11 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import platform
 import re
 import socket
-import subprocess
 import sys
 import webbrowser
 from datetime import datetime
@@ -104,18 +101,6 @@ HTML_PAGE = """\
     .col-time  {{ color: var(--dim); width: 5.5rem; white-space: nowrap; }}
     .col-name  {{ color: var(--blue); width: 16rem; }}
     .col-title {{ }}
-    .col-open  {{ width: 5rem; text-align: right; }}
-    .open-btn {{
-      background: #404040;
-      color: var(--text);
-      border: none;
-      border-radius: 3px;
-      padding: 0.2rem 0.65rem;
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 0.85rem;
-    }}
-    .open-btn:hover {{ background: #555; }}
     #empty {{
       color: var(--dim);
       padding: 2rem 0.75rem;
@@ -136,7 +121,6 @@ HTML_PAGE = """\
         <th>time</th>
         <th>student</th>
         <th>title</th>
-        <th></th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -167,9 +151,7 @@ HTML_PAGE = """\
         tr.innerHTML =
           '<td class="col-time">' + esc(d.time) + '</td>' +
           '<td class="col-name">' + esc(d.student) + '</td>' +
-          '<td class="col-title">' + esc(d.title) + '</td>' +
-          '<td class="col-open"><button class="open-btn" ' +
-            'onclick="openFile(this,' + JSON.stringify(d.path) + ')">open</button></td>';
+          '<td class="col-title">' + esc(d.title) + '</td>';
         tbody.prepend(tr);
         status.textContent = d.student + ' submitted \u201c' + d.title + '\u201d';
         status.className = 'active';
@@ -181,15 +163,6 @@ HTML_PAGE = """\
       }});
 
       es.onerror = () => setTimeout(connect, 3000);
-    }}
-
-    function openFile(btn, path) {{
-      console.log('[open] path:', path);
-      btn.disabled = true;
-      fetch('/open?path=' + encodeURIComponent(path))
-        .then(r => {{ console.log('[open] status:', r.status); return r.json(); }})
-        .then(d => {{ console.log('[open] result:', JSON.stringify(d)); if (!d.ok) btn.disabled = false; }})
-        .catch(e => {{ console.log('[open] error:', e); btn.disabled = false; }});
     }}
 
     function esc(s) {{
@@ -381,30 +354,6 @@ async def handle_submit(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
 
-async def handle_open(request: web.Request) -> web.Response:
-    raw = request.rel_url.query.get("path", "")
-    print(f"[open] raw={repr(raw)}", flush=True)
-    try:
-        dest = Path(raw).resolve()
-        allowed = (Path.home() / "Downloads" / "Submissions").resolve()
-        print(f"[open] dest={dest}  allowed={allowed}  ok={str(dest).startswith(str(allowed))}", flush=True)
-        if not str(dest).startswith(str(allowed)):
-            return web.json_response({"ok": False, "error": "Forbidden"}, status=403)
-        if not dest.exists():
-            print(f"[open] file not found", flush=True)
-            return web.json_response({"ok": False, "error": "Not found"}, status=404)
-        system = platform.system()
-        if system == "Darwin":
-            subprocess.Popen(["open", str(dest)])
-        elif system == "Windows":
-            os.startfile(str(dest))  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", str(dest)])
-        return web.json_response({"ok": True})
-    except Exception as exc:
-        print(f"[open] exception: {exc}", flush=True)
-        return web.json_response({"ok": False, "error": str(exc)}, status=500)
-
 
 # ── mDNS advertisement ───────────────────────────────────────────────────────
 
@@ -439,7 +388,6 @@ async def run_server(teacher_name: str, port: int) -> web.AppRunner:
     app.router.add_get("/", handle_index)
     app.router.add_get("/events", handle_events)
     app.router.add_post("/submit", handle_submit)
-    app.router.add_get("/open", handle_open)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
