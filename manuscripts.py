@@ -2796,49 +2796,8 @@ def create_app(storage):
 
     project_list.on_select = open_project
 
-    def open_export(path_str):
-        if path_str == "__empty__":
-            return
-        path = Path(path_str)
-        if path.suffix.lower() == ".pdf":
-            printers = _detect_printers()
-            if printers:
-                async def _show():
-                    dlg = PrinterPickerDialog(printers, path)
-                    result = await show_dialog_as_float(state, dlg)
-                    if result:
-                        show_notification(state, f"Sent to {result}.")
-                asyncio.ensure_future(_show())
-                return
-        try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", str(path)])
-            else:
-                subprocess.Popen(["xdg-open", str(path)])
-        except Exception:
-            pass
-
-    export_list.on_select = open_export
-
-    @export_list._kb.add("s")
-    def _submit_export(event):
-        idx = export_list.selected_index
-        if idx >= len(state.export_paths):
-            return
-        path = state.export_paths[idx]
-        if path.suffix.lower() != ".pdf":
-            show_notification(state, f"Only PDF files can be submitted.")
-            return
-
-        async def _do():
-            try:
-                await _do_submit(path)
-            except Exception as exc:
-                show_notification(state, f"Submit error: {type(exc).__name__}: {str(exc)[:50]}")
-
-        asyncio.ensure_future(_do())
-
     async def _do_submit(path):
+        """Discover a teacher server and POST the given PDF."""
         # Student name: frontmatter author > saved config > prompt
         student_name = ""
         if state.current_project:
@@ -2908,6 +2867,45 @@ def create_app(storage):
         except Exception as exc:
             show_notification(state, f"Submission failed: {str(exc)[:60]}")
 
+    def open_export(path_str):
+        if path_str == "__empty__":
+            return
+        path = Path(path_str)
+
+        def _open_in_os():
+            try:
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", str(path)])
+                else:
+                    subprocess.Popen(["xdg-open", str(path)])
+            except Exception:
+                pass
+
+        if path.suffix.lower() == ".pdf":
+            async def _show():
+                printers = _detect_printers()
+                cmds = [("Submit to teacher", "wireless", _do_submit)]
+                if printers:
+                    async def _do_print():
+                        dlg = PrinterPickerDialog(printers, path)
+                        result = await show_dialog_as_float(state, dlg)
+                        if result:
+                            show_notification(state, f"Sent to {result}.")
+                    cmds.append(("Print", "send to printer", _do_print))
+                cmds.append(("Open", "view file", _open_in_os))
+                dlg = CommandPaletteDialog(cmds)
+                action = await show_dialog_as_float(state, dlg)
+                if action is not None:
+                    if asyncio.iscoroutinefunction(action):
+                        await action(path) if action is _do_submit else await action()
+                    elif callable(action):
+                        action()
+            asyncio.ensure_future(_show())
+        else:
+            _open_in_os()
+
+    export_list.on_select = open_export
+
     projects_view = HSplit([
         VSplit([
             Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
@@ -2921,7 +2919,7 @@ def create_app(storage):
     ])
 
     exports_hints_control = FormattedTextControl(
-        lambda: [("class:hint", " (m) manuscripts  (d) delete  (s) submit")])
+        lambda: [("class:hint", " (m) manuscripts  (d) delete")])
     exports_hints_window = Window(content=exports_hints_control, height=1)
 
     exports_view = HSplit([
