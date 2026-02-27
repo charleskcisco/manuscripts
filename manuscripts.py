@@ -2820,6 +2820,94 @@ def create_app(storage):
 
     export_list.on_select = open_export
 
+    @export_list._kb.add("s")
+    def _submit_export(event):
+        idx = export_list.selected_index
+        if idx >= len(state.export_paths):
+            return
+        path = state.export_paths[idx]
+        if path.suffix.lower() != ".pdf":
+            show_notification(state, f"Only PDF files can be submitted.")
+            return
+
+        async def _do():
+            try:
+                await _do_submit(path)
+            except Exception as exc:
+                show_notification(state, f"Submit error: {type(exc).__name__}: {str(exc)[:50]}")
+
+        asyncio.ensure_future(_do())
+
+    async def _do_submit(path):
+        # Student name: frontmatter author > saved config > prompt
+        student_name = ""
+        if state.current_project:
+            fm = parse_yaml_frontmatter(state.current_project.content)
+            student_name = fm.get("author", "").strip()
+        if not student_name:
+            student_name = state.student_name
+        if not student_name:
+            dlg = InputDialog(
+                "Your Name",
+                "Enter your name (shown to teacher):",
+                state.student_name or "",
+            )
+            student_name = await show_dialog_as_float(state, dlg)
+            if not student_name:
+                show_notification(state, "Submission cancelled.")
+                return
+            state.student_name = student_name
+            cfg = _load_config()
+            cfg["student_name"] = student_name
+            _save_config(cfg)
+
+        # Discover teacher(s) on LAN
+        show_notification(state, "Looking for teacher\u2026", duration=5.0)
+        teachers = await _discover_teachers(timeout=3.0)
+        if not teachers:
+            show_notification(state, "No teacher found on network.")
+            return
+        if len(teachers) == 1:
+            teacher_name, host, port = teachers[0]
+        else:
+            dlg = TeacherPickerDialog(teachers)
+            choice = await show_dialog_as_float(state, dlg)
+            if not choice:
+                show_notification(state, "Submission cancelled.")
+                return
+            teacher_name, host, port = choice
+
+        # POST the PDF to the teacher's server
+        show_notification(state, f"Sending to {teacher_name}\u2026", duration=10.0)
+        doc_title = path.stem
+        try:
+            import aiohttp
+            data = aiohttp.FormData()
+            data.add_field("student", student_name)
+            data.add_field("title", doc_title)
+            data.add_field(
+                "file", path.read_bytes(),
+                filename=path.name, content_type="application/pdf",
+            )
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"http://{host}:{port}/submit",
+                    data=data,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    result = await resp.json()
+            if result.get("ok"):
+                show_notification(state, f"Submitted to {teacher_name}.")
+            else:
+                show_notification(
+                    state,
+                    f"Submission failed: {result.get('error', 'unknown')}",
+                )
+        except ImportError:
+            show_notification(state, "Run: pip install aiohttp zeroconf")
+        except Exception as exc:
+            show_notification(state, f"Submission failed: {str(exc)[:60]}")
+
     projects_view = HSplit([
         VSplit([
             Window(FormattedTextControl([("class:title bold", " Manuscripts")]),
@@ -3518,99 +3606,6 @@ def create_app(storage):
         else:
             state.mass_export_pending = now
             show_notification(state, "Press m again to export all as Markdown.", duration=2.0)
-
-    @kb.add("s", filter=projects_list_focused)
-    def _(event):
-        show_notification(state, "[debug] s handler fired", duration=30.0)
-        if not state.showing_exports:
-            show_notification(state, "[debug] not in exports view")
-            return
-        idx = export_list.selected_index
-        if idx >= len(state.export_paths):
-            show_notification(state, f"[debug] no export at index {idx} (total: {len(state.export_paths)})")
-            return
-        path = state.export_paths[idx]
-        if path.suffix.lower() != ".pdf":
-            show_notification(state, f"Only PDF files can be submitted. (got {path.suffix})")
-            return
-
-        async def _do():
-          try:
-            await _do_submit()
-          except Exception as exc:
-            show_notification(state, f"Submit error: {type(exc).__name__}: {str(exc)[:50]}")
-
-        async def _do_submit():
-            # Student name: frontmatter author > saved config > prompt
-            student_name = ""
-            if state.current_project:
-                fm = parse_yaml_frontmatter(state.current_project.content)
-                student_name = fm.get("author", "").strip()
-            if not student_name:
-                student_name = state.student_name
-            if not student_name:
-                dlg = InputDialog(
-                    "Your Name",
-                    "Enter your name (shown to teacher):",
-                    state.student_name or "",
-                )
-                student_name = await show_dialog_as_float(state, dlg)
-                if not student_name:
-                    show_notification(state, "Submission cancelled.")
-                    return
-                state.student_name = student_name
-                cfg = _load_config()
-                cfg["student_name"] = student_name
-                _save_config(cfg)
-
-            # Discover teacher(s) on LAN
-            show_notification(state, "Looking for teacher\u2026", duration=5.0)
-            teachers = await _discover_teachers(timeout=3.0)
-            if not teachers:
-                show_notification(state, "No teacher found on network.")
-                return
-            if len(teachers) == 1:
-                teacher_name, host, port = teachers[0]
-            else:
-                dlg = TeacherPickerDialog(teachers)
-                choice = await show_dialog_as_float(state, dlg)
-                if not choice:
-                    show_notification(state, "Submission cancelled.")
-                    return
-                teacher_name, host, port = choice
-
-            # POST the PDF to the teacher's server
-            show_notification(state, f"Sending to {teacher_name}\u2026", duration=10.0)
-            doc_title = path.stem
-            try:
-                import aiohttp
-                data = aiohttp.FormData()
-                data.add_field("student", student_name)
-                data.add_field("title", doc_title)
-                data.add_field(
-                    "file", path.read_bytes(),
-                    filename=path.name, content_type="application/pdf",
-                )
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"http://{host}:{port}/submit",
-                        data=data,
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    ) as resp:
-                        result = await resp.json()
-                if result.get("ok"):
-                    show_notification(state, f"Submitted to {teacher_name}.")
-                else:
-                    show_notification(
-                        state,
-                        f"Submission failed: {result.get('error', 'unknown')}",
-                    )
-            except ImportError:
-                show_notification(state, "Run: pip install aiohttp zeroconf")
-            except Exception as exc:
-                show_notification(state, f"Submission failed: {str(exc)[:60]}")
-
-        asyncio.ensure_future(_do())
 
     @kb.add("p", filter=projects_list_focused)
     def _(event):
