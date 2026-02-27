@@ -21,7 +21,7 @@ pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
 python3 make_icons.py
 
 pyinstaller --onedir --windowed \
-    --name manuscripts-share \
+    --name "manuscripts share" \
     --icon icon.icns \
     --collect-all zeroconf \
     --collect-all aiohttp \
@@ -35,11 +35,11 @@ pyinstaller --onedir --windowed \
 # Build DMG with an Applications symlink for drag-and-drop install
 rm -rf dist/dmg-staging
 mkdir dist/dmg-staging
-cp -r "dist/manuscripts-share.app" "dist/dmg-staging/"
+cp -r "dist/manuscripts share.app" "dist/dmg-staging/"
 ln -s /Applications "dist/dmg-staging/Applications"
 
 hdiutil create \
-    -volname "manuscripts-share" \
+    -volname "manuscripts share" \
     -srcfolder "dist/dmg-staging" \
     -ov \
     -format UDZO \
@@ -50,5 +50,5 @@ rm -rf dist/dmg-staging
 echo ""
 echo "Done: dist/${DMG}"
 echo ""
-echo "Distribute this DMG. Users open it, drag manuscripts-share to Applications."
+echo "Distribute this DMG. Users open it, drag 'manuscripts share' to Applications."
 echo "Note: on first run macOS may block the app. Right-click → Open to bypass."

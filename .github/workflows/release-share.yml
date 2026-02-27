@@ -21,7 +21,7 @@ jobs:
           pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pyobjc
           python make_icons.py
           pyinstaller --onedir --windowed \
-            --name manuscripts-share \
+            --name "manuscripts share" \
             --icon icon.icns \
             --collect-all zeroconf \
             --collect-all aiohttp \
@@ -37,10 +37,10 @@ jobs:
           VERSION="${TAG#share-v}"
           DMG="manuscripts-share-mac-v${VERSION}.dmg"
           mkdir manuscripts-share/dist/dmg-staging
-          cp -r "manuscripts-share/dist/manuscripts-share.app" "manuscripts-share/dist/dmg-staging/"
+          cp -r "manuscripts-share/dist/manuscripts share.app" "manuscripts-share/dist/dmg-staging/"
           ln -s /Applications "manuscripts-share/dist/dmg-staging/Applications"
           hdiutil create \
-            -volname "manuscripts-share" \
+            -volname "manuscripts share" \
             -srcfolder "manuscripts-share/dist/dmg-staging" \
             -ov \
             -format UDZO \
@@ -65,7 +65,7 @@ jobs:
           pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pywin32
           python make_icons.py
           pyinstaller --onefile --noconsole `
-            --name manuscripts-share `
+            "--name" "manuscripts share" `
             --icon icon.ico `
             --collect-all zeroconf `
             --collect-all aiohttp `
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: manuscripts-share/dist/manuscripts-share.exe
+          path: "manuscripts-share/dist/manuscripts share.exe"
 
   release:
     name: Create GitHub Release
@@ -107,4 +107,4 @@ jobs:
             The app then runs in the system tray — look for the gold icon.
           files: |
             artifacts/mac-build/*.dmg
-            artifacts/windows-build/manuscripts-share.exe
+            artifacts/windows-build/manuscripts share.exe
