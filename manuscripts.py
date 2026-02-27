@@ -3522,13 +3522,15 @@ def create_app(storage):
     @kb.add("s", filter=projects_list_focused)
     def _(event):
         if not state.showing_exports:
+            show_notification(state, "[debug] not in exports view")
             return
         idx = export_list.selected_index
         if idx >= len(state.export_paths):
+            show_notification(state, f"[debug] no export at index {idx} (total: {len(state.export_paths)})")
             return
         path = state.export_paths[idx]
         if path.suffix.lower() != ".pdf":
-            show_notification(state, "Only PDF files can be submitted.")
+            show_notification(state, f"Only PDF files can be submitted. (got {path.suffix})")
             return
 
         async def _do():
