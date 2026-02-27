@@ -1390,10 +1390,12 @@ async def show_dialog_as_float(state, dialog):
     result = await dialog.future
     if float_ in state.root_container.floats:
         state.root_container.floats.remove(float_)
-    try:
-        app.layout.focus(focused_before)
-    except ValueError:
-        pass
+    # Only restore prior focus if no other dialogs are still showing
+    if not state.root_container.floats:
+        try:
+            app.layout.focus(focused_before)
+        except ValueError:
+            pass
     app.invalidate()
     return result
 
@@ -3698,6 +3700,19 @@ def create_app(storage):
                 show_notification(state, "Manuscript deleted.")
 
         asyncio.ensure_future(_do())
+
+    @kb.add("s", filter=projects_list_focused)
+    def _(event):
+        if not state.showing_exports:
+            return
+        idx = export_list.selected_index
+        if idx >= len(state.export_paths):
+            return
+        path = state.export_paths[idx]
+        if path.suffix.lower() != ".pdf":
+            show_notification(state, "Only PDF files can be submitted.")
+            return
+        asyncio.ensure_future(_do_submit(path))
 
     @kb.add("c", filter=projects_list_focused)
     def _(event):
