@@ -1415,7 +1415,8 @@ async def _discover_teachers(timeout: float = 3.0) -> list:
                 )
                 if not teacher:
                     teacher = name.split("._manuscripts")[0]
-                found.append((teacher, host, info.port))
+                requires_auth = (info.properties.get(b"auth") or b"0") == b"1"
+                found.append((teacher, host, info.port, requires_auth))
 
     zc = AsyncZeroconf()
     browser = ServiceBrowser(
@@ -1691,7 +1692,7 @@ class TeacherPickerDialog:
         self.list = SelectableList(on_select=self._select)
         self.list.set_items([
             (i, f"  {name}  ·  {host}:{port}")
-            for i, (name, host, port) in enumerate(teachers)
+            for i, (name, host, port, _) in enumerate(teachers)
         ])
 
         @self.list._kb.add("escape", eager=True)
@@ -2827,14 +2828,23 @@ def create_app(storage):
             show_notification(state, "No teacher found on network.")
             return
         if len(teachers) == 1:
-            teacher_name, host, port = teachers[0]
+            teacher_name, host, port, requires_auth = teachers[0]
         else:
             dlg = TeacherPickerDialog(teachers)
             choice = await show_dialog_as_float(state, dlg)
             if not choice:
                 show_notification(state, "Submission cancelled.")
                 return
-            teacher_name, host, port = choice
+            teacher_name, host, port, requires_auth = choice
+
+        # Password prompt if teacher requires it
+        password = ""
+        if requires_auth:
+            dlg = InputDialog("Password", f"Enter password for {teacher_name}:", "")
+            password = await show_dialog_as_float(state, dlg)
+            if not password:
+                show_notification(state, "Submission cancelled.")
+                return
 
         # POST the PDF to the teacher's server
         show_notification(state, f"Sending to {teacher_name}\u2026", duration=10.0)
@@ -2844,6 +2854,7 @@ def create_app(storage):
             data = aiohttp.FormData()
             data.add_field("student", student_name)
             data.add_field("title", doc_title)
+            data.add_field("password", password)
             data.add_field(
                 "file", path.read_bytes(),
                 filename=path.name, content_type="application/pdf",

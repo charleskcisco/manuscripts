@@ -209,6 +209,37 @@ def _get_teacher_name() -> str:
     return name
 
 
+def _get_teacher_password() -> str:
+    """Prompt for a submission password. Empty string means no password required."""
+    cfg = _load_config()
+    existing = cfg.get("password", "")
+    if existing:
+        print(f"  password: (saved)  — press Enter to keep, or type a new one, or 'none' to remove")
+        try:
+            new = input("  Password: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return existing
+        if new.lower() == "none":
+            del cfg["password"]
+            _save_config(cfg)
+            return ""
+        if new:
+            cfg["password"] = new
+            _save_config(cfg)
+            return new
+        return existing
+    else:
+        print("  Leave blank for no password.")
+        try:
+            pwd = input("  Submission password: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            pwd = ""
+        if pwd:
+            cfg["password"] = pwd
+            _save_config(cfg)
+        return pwd
+
+
 # ── Network helpers ──────────────────────────────────────────────────────────
 
 def _get_local_ip() -> str:
@@ -305,12 +336,14 @@ async def handle_events(request: web.Request) -> web.StreamResponse:
 
 async def handle_submit(request: web.Request) -> web.Response:
     sse: SSEManager = request.app["sse"]
+    required_password: str = request.app["password"]
     try:
         reader = await request.multipart()
         student = ""
         title = ""
         file_bytes = b""
         ext = ".pdf"
+        submitted_password = ""
 
         async for part in reader:
             if part.name == "student":
@@ -322,6 +355,11 @@ async def handle_submit(request: web.Request) -> web.Response:
                 ct = part.headers.get("Content-Type", "application/pdf")
                 if "markdown" in ct or "text/plain" in ct:
                     ext = ".md"
+            elif part.name == "password":
+                submitted_password = (await part.read()).decode("utf-8", errors="replace").strip()
+
+        if required_password and submitted_password != required_password:
+            return web.json_response({"ok": False, "error": "Incorrect password"}, status=401)
 
         student = student or "Unknown Student"
         title = title or "Untitled"
@@ -362,6 +400,7 @@ async def advertise_mdns(
     teacher_name: str,
     port: int,
     zc: AsyncZeroconf,
+    password: str = "",
 ) -> AsyncServiceInfo:
     hostname = socket.gethostname()
     info = AsyncServiceInfo(
@@ -372,6 +411,7 @@ async def advertise_mdns(
         properties={
             "teacher": teacher_name,
             "version": "1",
+            "auth": "1" if password else "0",
         },
         server=f"{hostname}.local.",
     )
@@ -381,10 +421,11 @@ async def advertise_mdns(
 
 # ── Server setup ─────────────────────────────────────────────────────────────
 
-async def run_server(teacher_name: str, port: int) -> web.AppRunner:
+async def run_server(teacher_name: str, port: int, password: str = "") -> web.AppRunner:
     sse = SSEManager()
     app = web.Application()
     app["sse"] = sse
+    app["password"] = password
     app["html"] = HTML_PAGE.format(teacher_name=teacher_name)
     app.router.add_get("/", handle_index)
     app.router.add_get("/events", handle_events)
@@ -398,19 +439,22 @@ async def run_server(teacher_name: str, port: int) -> web.AppRunner:
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
+    print("\nmanuscripts-teacher setup")
     teacher_name = _get_teacher_name()
+    password = _get_teacher_password()
     port = _find_free_port()
     url = f"http://localhost:{port}/"
 
     print(f"\nmanuscripts-teacher")
-    print(f"  teacher : {teacher_name}")
-    print(f"  address : {url}")
+    print(f"  teacher  : {teacher_name}")
+    print(f"  password : {'(set)' if password else '(none)'}")
+    print(f"  address  : {url}")
     print(f"\nPress Ctrl+C to stop.\n")
 
     async def _run() -> None:
-        runner = await run_server(teacher_name, port)
+        runner = await run_server(teacher_name, port, password)
         zc = AsyncZeroconf(ip_version=IPVersion.V4Only)
-        info = await advertise_mdns(teacher_name, port, zc)
+        info = await advertise_mdns(teacher_name, port, zc, password)
         webbrowser.open(url)
         try:
             await asyncio.sleep(float("inf"))
