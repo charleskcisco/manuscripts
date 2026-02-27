@@ -1668,7 +1668,7 @@ class PrinterPickerDialog:
             subprocess.Popen([
                 "lp", "-d", printer, "-o", "sides=two-sided-long-edge",
                 str(self.file_path),
-            ])
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
         if not self.future.done():
@@ -2277,7 +2277,7 @@ class CommandPaletteDialog:
             body=HSplit([self.search_window, self.results], padding=0),
             buttons=[Button(text="Cancel", handler=self.cancel)],
             modal=True,
-            width=D(preferred=60, max=80),
+            width=D(preferred=40, max=50),
         )
 
     def _on_search_changed(self, buf):
@@ -2890,7 +2890,6 @@ def create_app(storage):
                     cmds = [("Submit to teacher", "wireless", "submit")]
                     if printers:
                         cmds.append(("Print", "send to printer", "print"))
-                    cmds.append(("Open", "view file", "open"))
                     dlg = CommandPaletteDialog(cmds)
                     choice = await show_dialog_as_float(state, dlg)
                     if choice == "submit":
@@ -2900,8 +2899,6 @@ def create_app(storage):
                         result = await show_dialog_as_float(state, dlg2)
                         if result:
                             show_notification(state, f"Sent to {result}.")
-                    elif choice == "open":
-                        _open_in_os()
                 except Exception as exc:
                     show_notification(state, f"Error: {type(exc).__name__}: {str(exc)[:50]}")
             asyncio.ensure_future(_show())
@@ -2945,8 +2942,11 @@ def create_app(storage):
 
     projects_screen = HSplit([
         DynamicContainer(get_projects_screen),
-        Window(FormattedTextControl(get_projects_status_text),
-               height=1, style="class:status"),
+        ConditionalContainer(
+            Window(FormattedTextControl(get_projects_status_text),
+                   height=1, style="class:status"),
+            filter=Condition(lambda: state.showing_exports),
+        ),
     ])
 
     # ── Editor screen widgets ────────────────────────────────────────
