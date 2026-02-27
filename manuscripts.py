@@ -3532,6 +3532,12 @@ def create_app(storage):
             return
 
         async def _do():
+          try:
+            await _do_submit()
+          except Exception as exc:
+            show_notification(state, f"Submit error: {type(exc).__name__}: {str(exc)[:50]}")
+
+        async def _do_submit():
             # Student name: frontmatter author > saved config > prompt
             student_name = ""
             if state.current_project:
