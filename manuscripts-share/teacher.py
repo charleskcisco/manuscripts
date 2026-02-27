@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-manuscripts-teacher — receives PDF submissions from students over LAN.
+manuscripts-share — receives PDF submissions from students over LAN.
 
 Usage:
     python teacher.py
@@ -439,13 +439,13 @@ async def run_server(teacher_name: str, port: int, password: str = "") -> web.Ap
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
-    print("\nmanuscripts-teacher setup")
+    print("\nmanuscripts-share setup")
     teacher_name = _get_teacher_name()
     password = _get_teacher_password()
     port = _find_free_port()
     url = f"http://localhost:{port}/"
 
-    print(f"\nmanuscripts-teacher")
+    print(f"\nmanuscripts-share")
     print(f"  teacher  : {teacher_name}")
     print(f"  password : {'(set)' if password else '(none)'}")
     print(f"  address  : {url}")

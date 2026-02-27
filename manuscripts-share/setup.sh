@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up dependencies for manuscripts-teacher.
+# Set up dependencies for manuscripts-share.
 #
 # Uses uv if available (no pip required), otherwise falls back to
 # the venv's own pip.
@@ -7,7 +7,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "Setting up manuscripts-teacher..."
+echo "Setting up manuscripts-share..."
 
 if command -v uv &>/dev/null; then
     echo "  Using uv..."
