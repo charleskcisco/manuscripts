@@ -1,6 +1,6 @@
 name: Release manuscripts-share
 
-# Trigger by pushing a tag like: git tag share-v1.1 && git push origin share-v1.1
+# Trigger by pushing a tag like: git tag share-v1.2 && git push origin share-v1.2
 on:
   push:
     tags:
@@ -65,7 +65,7 @@ jobs:
           pip install --quiet pyinstaller aiohttp zeroconf pystray Pillow pywin32
           python make_icons.py
           pyinstaller --onefile --noconsole `
-            "--name" "manuscripts share" `
+            "--name" "manuscripts-share" `
             --icon icon.ico `
             --collect-all zeroconf `
             --collect-all aiohttp `
@@ -75,10 +75,18 @@ jobs:
             "--add-data" "JetBrainsMono-Regular.ttf;." `
             "--add-data" "JetBrainsMono-Light.ttf;." `
             share.py
+      - name: Rename exe
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#share-v}"
+          mv "manuscripts-share/dist/manuscripts-share.exe" \
+             "manuscripts-share/dist/manuscripts-share-win-v${VERSION}.exe"
+          echo "ASSET=manuscripts-share/dist/manuscripts-share-win-v${VERSION}.exe" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: "manuscripts-share/dist/manuscripts share.exe"
+          path: ${{ env.ASSET }}
 
   release:
     name: Create GitHub Release
@@ -93,18 +101,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: manuscripts-share ${{ github.ref_name }}
+          name: manuscripts share ${{ github.ref_name }}
           body: |
-            ## manuscripts-share ${{ github.ref_name }}
+            ## manuscripts share ${{ github.ref_name }}
 
-            **macOS**: open the DMG, drag `manuscripts-share` to Applications
+            **macOS**: open the DMG, drag `manuscripts share` to Applications
             *(first run: right-click → Open to bypass Gatekeeper)*
 
-            **Windows**: double-click `manuscripts-share.exe`
+            **Windows**: double-click `manuscripts-share-win-v*.exe`
             *(first run: click "More info" → "Run anyway" to bypass SmartScreen)*
 
             A setup dialog will appear on first launch to set your name and password.
             The app then runs in the system tray — look for the gold icon.
           files: |
             artifacts/mac-build/*.dmg
-            artifacts/windows-build/manuscripts share.exe
+            artifacts/windows-build/*.exe
