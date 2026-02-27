@@ -330,9 +330,10 @@ async def handle_submit(request: web.Request) -> web.Response:
         save_dir = Path.home() / "Downloads" / "Submissions" / date_str
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_student = re.sub(r"[^\w\s\-]", "", student).strip()[:40]
-        safe_title = re.sub(r"[^\w\s\-]", "", title).strip()[:40]
-        dest = save_dir / f"{safe_student} - {safe_title}{ext}"
+        last_name = student.strip().split()[-1] if student.strip() else "Unknown"
+        safe_last = re.sub(r"[^\w\-]", "", last_name)[:30]
+        safe_title = re.sub(r"[^\w\s\-]", "", title).strip()[:50]
+        dest = save_dir / f"{safe_last}-{safe_title}{ext}"
         if dest.exists():
             stem, suffix, i = dest.stem, dest.suffix, 2
             while dest.exists():
