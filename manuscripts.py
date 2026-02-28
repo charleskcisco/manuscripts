@@ -4312,6 +4312,8 @@ def create_app(storage):
         out = _SCREENSHOTS_DIR / f"manuscripts-{ts}.png"
         if sys.platform == "darwin":
             cmd = ["screencapture", "-x", str(out)]
+        elif os.environ.get("WAYLAND_DISPLAY"):
+            cmd = ["grim", str(out)]
         else:
             cmd = ["scrot", str(out)]
         try:
@@ -4320,7 +4322,12 @@ def create_app(storage):
             )
             show_notification(state, f"Screenshot: {out.name}")
         except FileNotFoundError:
-            tool = "screencapture" if sys.platform == "darwin" else "scrot"
+            if sys.platform == "darwin":
+                tool = "screencapture"
+            elif os.environ.get("WAYLAND_DISPLAY"):
+                tool = "grim"
+            else:
+                tool = "scrot"
             show_notification(state, f"Screenshot failed: {tool} not found.")
 
     # ── Style ────────────────────────────────────────────────────────
