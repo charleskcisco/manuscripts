@@ -32,7 +32,7 @@ Thus, Manuscripts was born. Designed to facilitate the transmission of the skill
 git clone https://github.com/charleskcisco/manuscripts.git
 chmod +x setup.sh run.sh
 ./setup.sh     # creates venv, installs prompt_toolkit and other dependencies
-./run.sh       # launches journal
+./run.sh       # launches manuscripts
 ```
 
 ## Specifics
