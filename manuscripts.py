@@ -300,6 +300,7 @@ class Storage:
 # ════════════════════════════════════════════════════════════════════════
 
 _REFS_DIR = Path(__file__).resolve().parent / "refs"
+_SCREENSHOTS_DIR = Path(__file__).resolve().parent / "screenshots"
 _DEFAULT_SPACING = "double"
 
 
@@ -4303,6 +4304,24 @@ def create_app(storage):
     @kb.add("escape", filter=is_editor & no_float & editor_has_selection)
     def _(event):
         editor_area.buffer.exit_selection()
+
+    @kb.add("f12")
+    def _(event):
+        _SCREENSHOTS_DIR.mkdir(exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out = _SCREENSHOTS_DIR / f"manuscripts-{ts}.png"
+        if sys.platform == "darwin":
+            cmd = ["screencapture", "-x", str(out)]
+        else:
+            cmd = ["scrot", str(out)]
+        try:
+            subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            show_notification(state, f"Screenshot: {out.name}")
+        except FileNotFoundError:
+            tool = "screencapture" if sys.platform == "darwin" else "scrot"
+            show_notification(state, f"Screenshot failed: {tool} not found.")
 
     # ── Style ────────────────────────────────────────────────────────
 
