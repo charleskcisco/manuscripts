@@ -1,135 +1,152 @@
-# Manuscripts
+README UNDER CONSTRUCTION
 
-A writing appliance for students. Manuscripts combines a Markdown editor, source management, Chicago/Turabian citations, and PDF export in a single terminal application.
+# Manuscripts---a writing appliance for students
 
-## Philosophy
+## About
 
-Students shouldn't need to understand filesystems, BibTeX, or Zotero. They should think about **essays** and **sources**. Manuscripts provides:
-
-- **Projects, not files** — students see "Gatsby Essay," not `~/Documents/english/essay1.md`
-- **Simplified sources** — add a book by entering Author, Title, Year, Publisher. No BibTeX syntax required.
-- **One-key citations** — press `Ctrl+R`, search, press Enter. A Chicago-format footnote appears.
-- **Integrated export** — open the command palette (`Ctrl+P`) and select Export.
-
-## Requirements
+## Dependencies
 
 - Python 3.9+
-- Textual (and its dependencies: Rich, markdown-it-py, mdit-py-plugins, platformdirs)
-- For PDF/DOCX export: Pandoc
-- For PDF export: LibreOffice
+- prompt_toolkit
+- libreoffice
+- pandoc
+- cage
+- foot
+- cups
+- cups-client
+- lpr
+- python
+- prompt_toolkit
+- fonts-jetbrains-mono
+- ttf-mscorefonts-installer
 
-### Option A: pip install (recommended)
-
-```bash
-pip install textual
-```
-
-Then just run `python3 manuscripts.py`.
-
-### Option B: Vendored dependencies (no network needed)
-
-Place these zip files in the project directory:
-
-- `rich-master.zip` (from github.com/Textualize/rich)
-- `mdit-py-plugins-master.zip` (from github.com/executablebooks/mdit-py-plugins)
-- `textual-main.zip` (from github.com/Textualize/textual)
-
-Then:
+## First-time use
 
 ```bash
+git clone https://github.com/charleskcisco/manuscripts.git
 chmod +x setup.sh run.sh
-./setup.sh     # unpacks into vendor/
-./run.sh       # launches manuscripts
+./setup.sh     # creates venv, installs prompt_toolkit and other dependencies
+./run.sh       # launches journal
 ```
 
-## Usage
+## Specifics
+Manuscripts has a few views, each of which offers distinct features.
 
-```bash
-python3 manuscripts.py    # if textual is pip-installed
-./run.sh                   # if using vendored dependencies
-MANUSCRIPTS_DATA=~/essays ./run.sh   # custom data directory
-```
+- Manuscripts opens into the Projects view, which contains a searchable list of all of your projects. From there, you can either perform various operations on your projects (rename, pin to the top of the list, etc, on which more below), open a project in the editor view, or share exported project .pdf, .docx, or .md files (again, on which more below).
+- Once you enter the Editor view, you may edit your document (surprise again) using the ever-flexible the markdown syntax. You can also use ctrl+p to open a command palette, from which you can access a host of features.
+- Finally, in the Exports view, you may view projects you have exported and either print them or share them via a companion app running on your (or your instructor's) PC.
 
-Data is stored in `~/Documents/Manuscripts/` by default (projects and exports).
+Let me talk about these Surfaces and their features in more detail (organized from least to most interesting, for whimsy's sake).
 
-## Keyboard Shortcuts
+### Projects view
 
-### Projects Screen
+#### Pin
 
-| Key | Action |
-|-----|--------|
-| n | New manuscript |
-| d | Delete manuscript |
-| e | Toggle exports view |
+#### Rename
 
-Type in the search bar to filter manuscripts by name.
+#### Duplicate
 
-### Editor
+#### Delete
 
-| Key | Action |
-|-----|--------|
-| Ctrl+R | Insert citation |
-| Ctrl+N | Insert blank footnote (`^[]`) |
-| Ctrl+B | Bold |
-| Ctrl+I | Italic |
-| Ctrl+O | Manage sources |
-| Ctrl+S | Save |
-| Ctrl+M | Return to manuscripts |
-| Ctrl+H | Toggle keybindings panel |
-| Ctrl+P | Command palette |
+#### New
 
-### Command Palette
+#### Shut down (ctrl+s *from the Projects screen*)
+Manuscripts is designed to be the writerdeck OS, if you want to think about it with that metaphor in mind, and you miight spend all of your time with this device in this app. I wanted you to be able to shut down without exiting to CLI, so I set up a double press of ctrl+s to do the job. (*N*.*b*., this only works if you have auto-login set up on your device, because all it does is run 'sudo shutdown now'. 
 
-Cite, Bibliography, Sources, Export, and Insert frontmatter properties (author, title, instructor, date, spacing, style).
+#### Go to exports 
 
-## YAML Frontmatter
+### Editor view
+
+#### Keybindings guide (ctrl+g)---the epitome of boring, as most essential things are
+This opens a panel on the right that serves as a guide for the keybindings below. It can stay open as you edit as a reference if needed.
+
+#### Copy (ctrl+c)/Cut (ctrl+x)/Paste (ctrl+v)/Undo (ctrl+z)/Redo (ctrl+y)
+These work as you'd expect them to do.
+
+#### Bold (ctrl+b) and italicize (ctrl+i)
+Markdown is a plain text language that handles **bold**, *italics*, ***or a combination of the pair*** via enclosing words in asterisks. These bindings just place the appropriate number thereof around the word in which your cursor is currently resting or around your selection.
+
+#### Go to top (ctrl+up) or bottom (ctrl+down)
+By design, Journal places your cursor on the first line after any frontmatter. These bindings can move it either to the very top of the document or (probably more usefully) to its last line, so you can pick up where you left off.
+
+#### Invoke command palette
+
+#### Toggle word and paragraph count (ctrl+w)
+Word counts are a necessary evil, but they can prompt some really poor behavior from bad writers who need to hit them. Sometimes, though, it's helpful to measure the number of rounded, complete, coherent sets of thought you've produced. The paragraph count is your tool for that latter, more noble goal. You can also toggle this off, if you're the sort of writer who wants to work without the measurements in your face.
+
+#### Find and/or replace (ctrl+f)
+Manuscripts offers a relatively robust find and replace feature. Ctrl+f summons a panel in which you may type a particular word. At that point, you have a choice. Enter will send you into the editor pane and highlight the term you sought. You can cycle through results with ctrl+k (next) and ctrl+j (previous), and you can return to the find panel with ctrl+f, from which you can then also replace that word you sought or replace every instance of it in your document.
+
+#### Spell check (palette only)
+
+#### Return to Projects (esc)
+If you press escape (twice to prevent accidental activation), you'll return to the Projects screen.
+
+#### Insert blank footnote (ctrl+n)
+The next two features are related. First, ctrl+n offers a quick and frictionless way to insert an inline markdown footnote (the correct kind of markdown footnote; do not @ me). Once you've done that, though, the real magic begins. 
+
+#### Citation management (ctrl+o)
+Manuscripts has a built-in citation manager that will open a modal where you may enter and manage works on a per project basis (though you can also import citations from other projects as well). The types of sources supported at present are books, book sections, articles, and websites.
+
+#### Search for and insert citation (ctrl+r)
+This will open a pop-up from which you can fuzzy search your project's sources and insert a full footnote citation.
+
+#### Insert bibliography (palette only)
+
+#### Insert frontmatter (palette only)
+This will insert at the top of the document the frontmatter relevant to the export function. I reckon title, author, instructor, and date are pretty self-explanatory, or will be once you understand how this feature works. Style accepts one of two case sensitive inputs: "chicago" and "mla". Spacing, likewise, accepts "single" or "double". You can also add your own frontmatter elements, the most relevant of which might be "bibliography", "csl", and "tags". Now to talk about the final feature in this section.
+
+##### Example
 
 ```yaml
 ---
 title: "My Essay"
 author: "First Last"
 instructor: "Prof. Name"
-date: "January 2026"
+date: "2026-02-13"
 spacing: double
 style: chicago
+bibliography: /home/username/documents/sources/library.bib
+csl: /home/username/documents/sources/chicago.csl 
 ---
 ```
 
-- **spacing**: `single`, `double`, `dg.single`, `dg.double`
+- **spacing**: `single`, `double`
 - **style**: `chicago` (Turabian cover page) or `mla` (MLA header)
+- **bibliography**: path to `.bib` file (enables `--citeproc` during export)
+- **csl**: path to `.*csl` file
 
-## Source Types
+#### Export (palette only)
+This feature uses pandoc and libreoffice in the background to produce a .pdf formatted for submission in academic contexts. Pulling from the frontmatter, pandoc shapes your .md into a .docx formatted according to either Chicago style (with a title page containing your title, author, instructor, and date and page numbers centered in the footer with the final word of the author field appended to the front) or MLA (with a header on the first page according to MLA standards and page numbers on the top right). These can be either single- or double-spaced. Then, if you selected the .pdf output, it will use libreoffice to headlessly convert the .docx into a .pdf. You can either print or share these outputs from the exports screen.
 
-### Book
-Author (Last, First), Title, Year, Publisher
+### Exports view
 
-### Book Section
-Author (Last, First), Chapter Title, Book Title, Editor, Year, Publisher, Pages
+### Keyboard shortcuts in short
 
-### Article
-Author (Last, First), Title, Year, Journal, Volume, Issue, Pages
+#### Projects
 
-### Website
-Author (Last, First), Title, Year, Website Name, URL, Access Date
+| Key | Action              |
+| --- | ------------------- |
+| n   | New entry           |
+| r   | Rename entry        |
+| d   | Delete entry        |
+| c   | Duplicate entry     |
+| e   | Toggle exports view |
+| /   | Focus search        |
+| Ctrl+S (x2) | Shut down        |
 
-Sources can also be imported from other manuscripts in your library.
+#### Editor
 
-## Citation Format
-
-Chicago/Turabian style:
-
-**Footnote:** F. Scott Fitzgerald, *The Great Gatsby* (Scribner, 1925), 42.
-
-**Bibliography:** Fitzgerald, F. Scott. *The Great Gatsby*. Scribner, 1925.
-
-**Book section footnote:** John Smith, "My Chapter," in *The Big Book*, ed. Jane Doe (Oxford Press, 2020), 45-67.
-
-**Book section bibliography:** Smith, John. "My Chapter." In *The Big Book*, edited by Jane Doe, 45-67. Oxford Press, 2020.
-
-## Data Storage
-
-Projects are stored as JSON files in `~/.manuscripts/projects/`. Each project contains its text content and source metadata. No external database required.
-
-## License
-
-MIT
+| Key      | Action                               |
+| -------- | ------------------------------------ |
+| Ctrl+B   | Bold                                 |
+| Ctrl+F   | Find/Replace                         |
+| Ctrl+G   | Toggle keybindings panel             |
+| Ctrl+I   | Italic                               |
+| Ctrl+N   | Insert blank footnote (`^[]`)        |
+| Ctrl+O   | Citation manager                     |
+| Ctrl+P   | Command palette                      |
+| Ctrl+R   | Insert citation                      |
+| Ctrl+S   | Save                                 |
+| Ctrl+W   | Toggle word/paragraph count          |
+| Esc (x2) | Return to file browser               |
