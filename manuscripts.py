@@ -1528,6 +1528,28 @@ def _word_count(text):
     return len(body.split())
 
 
+def _strip_for_combine(text):
+    """Strip YAML frontmatter and bibliography section for combining."""
+    body = re.sub(r"^---\n.*?\n---\n?", "", text, count=1, flags=re.DOTALL)
+    body = re.split(
+        r"^## (?:Bibliography|References|Works Cited)\s*$",
+        body, maxsplit=1, flags=re.MULTILINE,
+    )[0]
+    return body.strip()
+
+
+def _dedup_sources(sources):
+    """Deduplicate source dicts by (author, title, year)."""
+    seen = set()
+    result = []
+    for s in sources:
+        key = (s.get("author", ""), s.get("title", ""), s.get("year", ""))
+        if key not in seen:
+            seen.add(key)
+            result.append(s)
+    return result
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  Dialogs
 # ════════════════════════════════════════════════════════════════════════
@@ -2331,6 +2353,171 @@ class ImportSourcesDialog:
         return self.dialog
 
 
+class CombinePickerDialog:
+    """Multi-select dialog for picking manuscripts to combine."""
+
+    def __init__(self, projects):
+        self.future = asyncio.Future()
+        self.projects = projects  # list of (id, name)
+        self.selected = set()
+        self.cursor = 0
+        kb = KeyBindings()
+
+        @kb.add("escape", eager=True)
+        def _escape(event):
+            if not self.future.done():
+                self.future.set_result(None)
+
+        @kb.add("up")
+        def _up(event):
+            if self.cursor > 0:
+                self.cursor -= 1
+
+        @kb.add("down")
+        def _down(event):
+            if self.cursor < len(self.projects) - 1:
+                self.cursor += 1
+
+        @kb.add(" ")
+        def _toggle(event):
+            if self.projects:
+                pid = self.projects[self.cursor][0]
+                if pid in self.selected:
+                    self.selected.discard(pid)
+                else:
+                    self.selected.add(pid)
+
+        @kb.add("enter")
+        def _confirm(event):
+            if len(self.selected) >= 2 and not self.future.done():
+                result = [(pid, name) for pid, name in self.projects
+                          if pid in self.selected]
+                self.future.set_result(result)
+
+        self.control = FormattedTextControl(
+            self._get_text, focusable=True, key_bindings=kb,
+        )
+        body = HSplit([
+            Window(content=self.control, style="class:select-list",
+                   wrap_lines=False),
+            Window(
+                content=FormattedTextControl(self._get_footer),
+                height=1, style="class:hint",
+            ),
+        ], padding=0)
+        self.dialog = Dialog(
+            title="Combine \u2014 select manuscripts (space to toggle)",
+            body=body,
+            buttons=[Button(text="Cancel", handler=lambda: (
+                self.future.set_result(None)
+                if not self.future.done() else None))],
+            modal=True,
+            width=D(preferred=50, max=65),
+        )
+
+    def _get_text(self):
+        result = []
+        for i, (pid, name) in enumerate(self.projects):
+            check = "[x]" if pid in self.selected else "[ ]"
+            line = f"  {check} {name}\n"
+            if i == self.cursor:
+                result.append(("[SetCursorPosition]", ""))
+                result.append(("class:select-list.selected", line))
+            else:
+                result.append(("", line))
+        return result
+
+    def _get_footer(self):
+        n = len(self.selected)
+        if n < 2:
+            return [("class:hint", f" {n} selected \u2014 select at least 2")]
+        return [("class:hint", f" {n} selected \u2014 enter to continue")]
+
+    def __pt_container__(self):
+        return self.dialog
+
+
+class CombineOrderDialog:
+    """Reorder dialog for arranging selected manuscripts."""
+
+    def __init__(self, items):
+        self.future = asyncio.Future()
+        self.items = list(items)  # list of (id, name)
+        self.cursor = 0
+        kb = KeyBindings()
+
+        @kb.add("escape", eager=True)
+        def _escape(event):
+            if not self.future.done():
+                self.future.set_result(None)
+
+        @kb.add("up")
+        def _up(event):
+            if self.cursor > 0:
+                self.cursor -= 1
+
+        @kb.add("down")
+        def _down(event):
+            if self.cursor < len(self.items) - 1:
+                self.cursor += 1
+
+        @kb.add("s-up")
+        def _swap_up(event):
+            if self.cursor > 0:
+                i = self.cursor
+                self.items[i - 1], self.items[i] = self.items[i], self.items[i - 1]
+                self.cursor -= 1
+
+        @kb.add("s-down")
+        def _swap_down(event):
+            if self.cursor < len(self.items) - 1:
+                i = self.cursor
+                self.items[i], self.items[i + 1] = self.items[i + 1], self.items[i]
+                self.cursor += 1
+
+        @kb.add("enter")
+        def _confirm(event):
+            if not self.future.done():
+                self.future.set_result(list(self.items))
+
+        self.control = FormattedTextControl(
+            self._get_text, focusable=True, key_bindings=kb,
+        )
+        body = HSplit([
+            Window(content=self.control, style="class:select-list",
+                   wrap_lines=False),
+            Window(
+                content=FormattedTextControl(
+                    lambda: [("class:hint",
+                              " shift+\u2191/\u2193 to reorder \u2014 enter to confirm")]),
+                height=1, style="class:hint",
+            ),
+        ], padding=0)
+        self.dialog = Dialog(
+            title="Combine \u2014 set order (shift+arrows to move)",
+            body=body,
+            buttons=[Button(text="Cancel", handler=lambda: (
+                self.future.set_result(None)
+                if not self.future.done() else None))],
+            modal=True,
+            width=D(preferred=50, max=65),
+        )
+
+    def _get_text(self):
+        result = []
+        for i, (_, name) in enumerate(self.items):
+            line = f"  {i + 1}. {name}\n"
+            if i == self.cursor:
+                result.append(("[SetCursorPosition]", ""))
+                result.append(("class:select-list.selected", line))
+            else:
+                result.append(("", line))
+        return result
+
+    def __pt_container__(self):
+        return self.dialog
+
+
 class CommandPaletteDialog:
     """Command palette with fuzzy search."""
 
@@ -2815,7 +3002,7 @@ def create_app(storage):
         return [
             ("class:hint", " (/) search"),
             sep,
-            ("class:hint", "(c) copy (d) delete (e) exports (n) new (p) pin (r) rename"),
+            ("class:hint", "(c) copy (d) delete (j) join (n) new (p) pin (r) rename"),
         ]
     hints_control = FormattedTextControl(_get_hints)
     def _get_shutdown_hint():
@@ -3060,6 +3247,9 @@ def create_app(storage):
                 ("fg:#e0af68 bold", " manuscripts"),
                 ("class:hint", "  ·  projects"),
             ]), height=1, dont_extend_height=True),
+            Window(content=FormattedTextControl(
+                lambda: [("class:hint", "(e) exports  ·  ")]),
+                height=1, align=WindowAlign.RIGHT, dont_extend_width=True),
             Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
         ]),
         Window(height=1, char="─", style="class:hint"),
@@ -3766,6 +3956,48 @@ def create_app(storage):
         state.storage.save_project(copy)
         refresh_projects(project_search.text)
         show_notification(state, f"Copied '{loaded.name}'.")
+
+    @kb.add("j", filter=projects_list_focused)
+    def _(event):
+        if state.showing_exports:
+            return
+        if len(state.projects) < 2:
+            show_notification(state, "Need at least 2 manuscripts to combine.")
+            return
+
+        async def _do_combine():
+            items = [(p.id, p.name) for p in state.projects]
+            picker = CombinePickerDialog(items)
+            selected = await show_dialog_as_float(state, picker)
+            if not selected:
+                return
+            order_dlg = CombineOrderDialog(selected)
+            ordered = await show_dialog_as_float(state, order_dlg)
+            if not ordered:
+                return
+            bodies = []
+            all_sources = []
+            names = []
+            for pid, pname in ordered:
+                proj = state.storage.load_project(pid)
+                if not proj:
+                    continue
+                body = _strip_for_combine(proj.content)
+                if body:
+                    bodies.append(body)
+                all_sources.extend(proj.sources)
+                names.append(pname)
+            combined_name = "Combined \u2014 " + ", ".join(names)
+            if len(combined_name) > 80:
+                combined_name = combined_name[:77] + "..."
+            new_proj = state.storage.create_project(combined_name)
+            new_proj.content = "\n\n".join(bodies)
+            new_proj.sources = _dedup_sources(all_sources)
+            state.storage.save_project(new_proj)
+            refresh_projects(project_search.text)
+            show_notification(state, f"Created '{combined_name}'.")
+
+        asyncio.ensure_future(_do_combine())
 
     @kb.add("e", filter=projects_list_focused)
     def _(event):
