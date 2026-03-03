@@ -3247,10 +3247,11 @@ def create_app(storage):
                 ("fg:#e0af68 bold", " manuscripts"),
                 ("class:hint", "  ·  projects"),
             ]), height=1, dont_extend_height=True),
-            Window(content=FormattedTextControl(
-                lambda: [("class:hint", "(e) exports  ·  ")]),
-                height=1, align=WindowAlign.RIGHT, dont_extend_width=True),
-            Window(content=shutdown_hint_control, height=1, align=WindowAlign.RIGHT),
+            Window(content=FormattedTextControl(lambda: [
+                ("class:hint", "(e) exports "),
+                ("class:hint.sep", " · "),
+            ] + _get_shutdown_hint()),
+                height=1, align=WindowAlign.RIGHT),
         ]),
         Window(height=1, char="─", style="class:hint"),
         project_list,
