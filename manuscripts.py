@@ -3192,10 +3192,10 @@ def create_app(storage):
         except ImportError:
             sending.close()
             await show_dialog_as_float(state, AlertDialog("Run: pip install aiohttp zeroconf"))
-        except OSError:
+        except OSError as exc:
             sending.close()
             await show_dialog_as_float(state, AlertDialog(
-                f"Cannot reach {teacher_name}. Is receiver.py running?"
+                f"Cannot reach {teacher_name} ({host}:{port}).\n{str(exc)[:80]}"
             ))
         except Exception as exc:
             sending.close()
