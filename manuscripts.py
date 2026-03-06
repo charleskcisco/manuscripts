@@ -4025,12 +4025,17 @@ def create_app(storage):
             combined_name = "Combined \u2014 " + ", ".join(names)
             if len(combined_name) > 80:
                 combined_name = combined_name[:77] + "..."
-            new_proj = state.storage.create_project(combined_name)
+            rename_dlg = InputDialog(title="Join", label_text="Name for joined manuscript:",
+                                     initial=combined_name, ok_text="Create")
+            final_name = await show_dialog_as_float(state, rename_dlg)
+            if not final_name:
+                return
+            new_proj = state.storage.create_project(final_name)
             new_proj.content = "\n\n".join(bodies)
             new_proj.sources = _dedup_sources(all_sources)
             state.storage.save_project(new_proj)
             refresh_projects(project_search.text)
-            show_notification(state, f"Created '{combined_name}'.")
+            show_notification(state, f"Created '{final_name}'.")
 
         asyncio.ensure_future(_do_combine())
 
