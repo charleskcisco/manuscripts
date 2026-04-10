@@ -4322,13 +4322,6 @@ def create_app(storage):
             except ValueError:
                 pass
 
-    @kb.add("f1", filter=is_editor & no_float)
-    def _(event):
-        async def _do():
-            dlg = MarkdownCheatSheetDialog()
-            await show_dialog_as_float(state, dlg)
-        asyncio.ensure_future(_do())
-
     @kb.add("c-r", filter=is_editor & no_float)
     def _(event):
         if not state.current_project:
@@ -4516,7 +4509,7 @@ def create_app(storage):
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", cmd_cite),
                     ("Keybindings", "^G", toggle_keybindings),
-                    ("Markdown reference", "F1", cmd_cheat_sheet),
+                    ("Markdown reference", "Markdown cheat sheet", cmd_cheat_sheet),
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),
