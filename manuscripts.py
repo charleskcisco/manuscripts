@@ -1401,6 +1401,12 @@ async def show_dialog_as_float(state, dialog):
     app = get_app()
     focused_before = app.layout.current_window
     app.layout.focus(dialog)
+    initial_focus = getattr(dialog, "initial_focus", None)
+    if initial_focus is not None:
+        try:
+            app.layout.focus(initial_focus)
+        except ValueError:
+            pass
     app.invalidate()
     result = await dialog.future
     if float_ in state.root_container.floats:
@@ -1636,23 +1642,6 @@ class ConfirmDialog:
 
     def __init__(self, question="Are you sure?"):
         self.future = asyncio.Future()
-        kb = KeyBindings()
-
-        @kb.add("y")
-        def _yes(event):
-            if not self.future.done():
-                self.future.set_result(True)
-
-        @kb.add("n")
-        def _no(event):
-            if not self.future.done():
-                self.future.set_result(False)
-
-        self._control = FormattedTextControl(
-            [("", f"\n  {question}\n")],
-            focusable=True,
-            key_bindings=kb,
-        )
 
         def yes_handler():
             if not self.future.done():
@@ -1662,16 +1651,37 @@ class ConfirmDialog:
             if not self.future.done():
                 self.future.set_result(False)
 
+        kb = KeyBindings()
+
+        @kb.add("y")
+        def _yes(event):
+            yes_handler()
+
+        @kb.add("n")
+        def _no(event):
+            no_handler()
+
+        @kb.add("escape", eager=True)
+        def _esc(event):
+            no_handler()
+
+        self._control = FormattedTextControl(
+            [("", f"\n  {question}\n")],
+            focusable=True,
+            key_bindings=kb,
+        )
+
+        yes_btn = Button(text="Yes", handler=yes_handler)
+        no_btn = Button(text="No", handler=no_handler)
+
         self.dialog = Dialog(
             title="Confirm",
             body=Window(content=self._control, height=3),
-            buttons=[
-                Button(text="Yes", handler=yes_handler),
-                Button(text="No", handler=no_handler),
-            ],
+            buttons=[yes_btn, no_btn],
             modal=True,
             width=D(preferred=50),
         )
+        self.initial_focus = yes_btn
 
     def cancel(self):
         if not self.future.done():
@@ -1784,6 +1794,10 @@ class AlertDialog:
             width=D(preferred=52, max=64),
         )
 
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
     def __pt_container__(self):
         return self.dialog
 
@@ -1849,6 +1863,9 @@ class SearchingDialog:
     def close(self):
         if not self.future.done():
             self.future.set_result(None)
+
+    def cancel(self):
+        self.close()
 
     def __pt_container__(self):
         return self.dialog
