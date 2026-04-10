@@ -4081,10 +4081,7 @@ def create_app(storage):
             return
         asyncio.ensure_future(_do_submit(path))
 
-    @kb.add("p", filter=projects_list_focused)
-    def _(event):
-        if not state.showing_exports:
-            return
+    def do_export_print():
         idx = export_list.selected_index
         if idx >= len(state.export_paths):
             return
@@ -4191,6 +4188,9 @@ def create_app(storage):
 
     @kb.add("p", filter=projects_list_focused)
     def _(event):
+        if state.showing_exports:
+            do_export_print()
+            return
         if not project_list.items:
             return
         idx = project_list.selected_index
@@ -4354,7 +4354,7 @@ def create_app(storage):
 
         asyncio.ensure_future(_do())
 
-    @kb.add("c-p", filter=no_float)
+    @kb.add("c-p", filter=is_editor & no_float)
     def _(event):
         async def _do():
             cmds = []
@@ -4514,11 +4514,6 @@ def create_app(storage):
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),
                     ("Spell check", "Check spelling", cmd_spell_check),
-                ]
-            else:
-                cmds = [
-                    ("Exports", "Toggle exports", toggle_exports),
-                    ("New manuscript", "Create new", None),
                 ]
             dlg = CommandPaletteDialog(cmds)
             action = await show_dialog_as_float(state, dlg)
