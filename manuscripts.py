@@ -252,6 +252,12 @@ class Project:
     def remove_source(self, source_id: str) -> None:
         self.sources = [s for s in self.sources if s.get("id") != source_id]
 
+    def update_source(self, source: Source) -> None:
+        self.sources = [
+            asdict(source) if s.get("id") == source.id else s
+            for s in self.sources
+        ]
+
 
 # ════════════════════════════════════════════════════════════════════════
 #  Storage
@@ -1470,6 +1476,8 @@ _clip_paste_cmd = None
 
 def _detect_clipboard():
     global _clip_copy_cmd, _clip_paste_cmd
+    _clip_copy_cmd = None
+    _clip_paste_cmd = None
     if sys.platform == "darwin":
         candidates = [(["/usr/bin/pbcopy"], ["/usr/bin/pbpaste"])]
     else:
@@ -1486,34 +1494,50 @@ def _detect_clipboard():
                 _clip_copy_cmd = copy_cmd
                 _clip_paste_cmd = paste_cmd
                 return
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (OSError, subprocess.SubprocessError):
             continue
 
 
 _detect_clipboard()
 
 
+def _try_copy(text):
+    if not _clip_copy_cmd:
+        return False
+    try:
+        result = subprocess.run(_clip_copy_cmd, input=text, text=True, timeout=2)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError):
+        return False
+
+
+def _try_paste():
+    if not _clip_paste_cmd:
+        return None
+    try:
+        result = subprocess.run(_clip_paste_cmd, capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            return result.stdout
+    except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def _clipboard_copy(text):
-    """Copy text to system clipboard."""
-    if _clip_copy_cmd:
-        try:
-            result = subprocess.run(_clip_copy_cmd, input=text, text=True, timeout=2)
-            return result.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
-    return False
+    """Copy text to system clipboard. Re-detects and retries once on failure."""
+    if _try_copy(text):
+        return True
+    _detect_clipboard()
+    return _try_copy(text)
 
 
 def _clipboard_paste():
-    """Get text from system clipboard."""
-    if _clip_paste_cmd:
-        try:
-            result = subprocess.run(_clip_paste_cmd, capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                return result.stdout
-        except subprocess.TimeoutExpired:
-            pass
-    return None
+    """Get text from system clipboard. Re-detects and retries once on failure."""
+    result = _try_paste()
+    if result is not None:
+        return result
+    _detect_clipboard()
+    return _try_paste()
 
 
 def _para_count(text):
@@ -1764,6 +1788,41 @@ class AlertDialog:
         return self.dialog
 
 
+class MarkdownCheatSheetDialog:
+    """Read-only scrollable Markdown reference."""
+
+    def __init__(self):
+        self.future: asyncio.Future = asyncio.Future()
+
+        def _close():
+            if not self.future.done():
+                self.future.set_result(None)
+
+        self.body = TextArea(
+            text=MARKDOWN_CHEAT_SHEET,
+            read_only=True,
+            scrollbar=True,
+            wrap_lines=False,
+            focusable=True,
+            height=D(preferred=24, max=32),
+        )
+
+        self.dialog = Dialog(
+            title="Markdown Cheat Sheet",
+            body=self.body,
+            buttons=[Button(text="Close", handler=_close)],
+            modal=True,
+            width=D(preferred=70, max=90),
+        )
+
+    def cancel(self):
+        if not self.future.done():
+            self.future.set_result(None)
+
+    def __pt_container__(self):
+        return self.dialog
+
+
 class SearchingDialog:
     """Non-blocking indicator shown while discovering teachers. Cancellable."""
 
@@ -1906,15 +1965,19 @@ class CitePickerDialog:
 
 
 class SourceFormDialog:
-    """Form for adding a new source with type selector and fields."""
+    """Form for adding or editing a source with type selector and fields."""
 
-    def __init__(self):
+    def __init__(self, existing: Source | None = None):
         self.future = asyncio.Future()
+        self.existing = existing
         self.current_type = ""
         self.field_inputs = {}
         for stype in SOURCE_TYPES:
             for field_key, label in SOURCE_FIELDS[stype]:
-                self.field_inputs[(stype, field_key)] = Buffer(multiline=False)
+                buf = Buffer(multiline=False)
+                if existing and stype == existing.source_type:
+                    buf.text = getattr(existing, field_key, "") or ""
+                self.field_inputs[(stype, field_key)] = buf
 
         field_kb = KeyBindings()
 
@@ -1977,7 +2040,7 @@ class SourceFormDialog:
             self._do_save()
 
         self.dialog = Dialog(
-            title="Add Source",
+            title="Edit Source" if existing else "Add Source",
             body=HSplit([
                 self.type_window,
                 self._body_container,
@@ -1989,6 +2052,9 @@ class SourceFormDialog:
             modal=True,
             width=D(preferred=80, max=100),
         )
+
+        if existing:
+            self.current_type = existing.source_type
 
     def _get_type_text(self):
         labels = {"book": "(b) Book", "book_section": "(s) Section",
@@ -2039,7 +2105,7 @@ class SourceFormDialog:
         if not data.get("title"):
             return
         source = Source(
-            id=datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
+            id=self.existing.id if self.existing else datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
             source_type=self.current_type,
             author=data.get("author", ""),
             title=data.get("title", ""),
@@ -2120,6 +2186,24 @@ class SourcesDialog:
                     if skipped:
                         msg += f" {skipped} duplicate(s) skipped."
                     show_notification(state, msg)
+                get_app().layout.focus(self.source_list.window)
+            asyncio.ensure_future(_do())
+
+        @action_kb.add("e")
+        def _edit(event):
+            sources = self.project.get_sources()
+            idx = self.source_list.selected_index
+            if idx >= len(sources):
+                return
+            selected = sources[idx]
+            async def _do():
+                dlg = SourceFormDialog(existing=selected)
+                updated = await show_dialog_as_float(state, dlg)
+                if updated:
+                    self.project.update_source(updated)
+                    state.storage.save_project(self.project)
+                    self._refresh_list()
+                    show_notification(state, "Source updated.")
                 get_app().layout.focus(self.source_list.window)
             asyncio.ensure_future(_do())
 
@@ -2978,7 +3062,56 @@ class FindReplacePanel:
 # ════════════════════════════════════════════════════════════════════════
 
 
-_FRONTMATTER_PROPS = ["title", "author", "instructor", "date", "spacing", "style"]
+_FRONTMATTER_PROPS = ["title", "author", "instructor", "course", "date", "spacing", "style"]
+
+
+MARKDOWN_CHEAT_SHEET = """\
+Markdown Cheat Sheet
+
+Headings
+  # H1
+  ## H2
+  ### H3
+
+Emphasis
+  **bold text**
+  *italicized text*
+  ~~strikethrough~~
+
+Lists
+  - Unordered item
+  1. Ordered item
+
+Blockquote
+  > blockquote
+
+Code
+  `inline code`
+
+  ```
+  fenced code block
+  ```
+
+Link & Image
+  [link text](https://example.com)
+  ![alt text](image.png)
+
+Horizontal Rule
+  ---
+
+Table
+  | Header | Title |
+  | ------ | ----- |
+  | Cell   | Cell  |
+
+Footnote
+  Sentence with a footnote.[^1]
+  [^1]: This is the footnote.
+
+Task List
+  - [x] Done
+  - [ ] Todo
+"""
 
 
 def create_app(storage):
@@ -4189,6 +4322,13 @@ def create_app(storage):
             except ValueError:
                 pass
 
+    @kb.add("f1", filter=is_editor & no_float)
+    def _(event):
+        async def _do():
+            dlg = MarkdownCheatSheetDialog()
+            await show_dialog_as_float(state, dlg)
+        asyncio.ensure_future(_do())
+
     @kb.add("c-r", filter=is_editor & no_float)
     def _(event):
         if not state.current_project:
@@ -4365,6 +4505,9 @@ def create_app(storage):
                     except ValueError:
                         pass
 
+                async def cmd_cheat_sheet():
+                    await show_dialog_as_float(state, MarkdownCheatSheetDialog())
+
                 cmds = [
                     ("Export", "Export document", cmd_export),
                     ("Find", "^F", cmd_find),
@@ -4373,6 +4516,7 @@ def create_app(storage):
                     ("Insert frontmatter", "YAML frontmatter", do_insert_frontmatter),
                     ("Insert reference", "^R", cmd_cite),
                     ("Keybindings", "^G", toggle_keybindings),
+                    ("Markdown reference", "F1", cmd_cheat_sheet),
                     ("Return to manuscripts", "Esc", return_to_projects),
                     ("Save", "^S", lambda: do_save()),
                     ("Sources", "^O", cmd_sources),

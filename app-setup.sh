@@ -21,6 +21,7 @@ sudo apt install -y \
     cups cups-client lpr \
     git cage foot \
     fonts-jetbrains-mono \
+    wl-clipboard xclip \
     python3 python3-pip python3-venv
 
 # Python venv + Manuscripts dependencies
