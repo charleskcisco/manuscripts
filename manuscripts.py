@@ -3426,6 +3426,8 @@ def create_app(storage):
 
     projects_screen = HSplit([
         DynamicContainer(get_projects_screen),
+        Window(FormattedTextControl(get_projects_status_text),
+               height=1, style="class:status"),
     ])
 
     # ── Editor screen widgets ────────────────────────────────────────
@@ -4082,21 +4084,17 @@ def create_app(storage):
         asyncio.ensure_future(_do_submit(path))
 
     def do_export_print():
-        show_notification(state, "DBG: do_export_print entered")
         idx = export_list.selected_index
         if idx >= len(state.export_paths):
-            show_notification(state, f"DBG: idx {idx} >= paths {len(state.export_paths)}")
             return
         path = state.export_paths[idx]
         if path.suffix.lower() != ".pdf":
             show_notification(state, "Only PDF files can be printed.")
             return
-        show_notification(state, "DBG: detecting printers")
         printers = _detect_printers()
         if not printers:
             show_notification(state, "No printers found.")
             return
-        show_notification(state, f"DBG: opening picker with {len(printers)} printers")
 
         async def _do_print():
             dlg = PrinterPickerDialog(printers, path)
@@ -4192,7 +4190,6 @@ def create_app(storage):
 
     @kb.add("p", filter=projects_list_focused)
     def _(event):
-        show_notification(state, f"DBG: p pressed, showing_exports={state.showing_exports}")
         if state.showing_exports:
             do_export_print()
             return
