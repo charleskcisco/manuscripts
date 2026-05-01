@@ -22,6 +22,7 @@ sudo apt install -y \
     git cage foot \
     fonts-jetbrains-mono \
     wl-clipboard xclip \
+    aspell aspell-en \
     python3 python3-pip python3-venv
 
 # Python venv + Manuscripts dependencies
